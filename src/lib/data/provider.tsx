@@ -11,9 +11,9 @@ import {
 } from "react";
 import { createDemoBackend } from "@/lib/data/demo";
 import { createSupabaseBackend } from "@/lib/data/supabase";
-import type { Backend, SignUpResult } from "@/lib/data/backend";
+import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
-import type { AppUser, Dependent, HelpRequest } from "@/lib/types";
+import type { AppRole, AppUser, Dependent, HelpRequest } from "@/lib/types";
 
 const ACTIVE_DEPENDENT_KEY = "conectatea.active-dependent";
 
@@ -28,10 +28,10 @@ type AppContextValue = {
   activeDependent: Dependent | null;
   setActiveDependentId: (id: string) => void;
   refreshDependents: () => Promise<void>;
-  signIn: (email: string, password: string) => Promise<AppUser>;
-  signUp: (name: string, email: string, password: string) => Promise<SignUpResult>;
+  signIn: (email: string, password: string, role?: AppRole) => Promise<AppUser>;
+  signUp: (input: SignUpInput) => Promise<SignUpResult>;
   signOut: () => Promise<void>;
-  enterDemo: () => Promise<AppUser>;
+  enterDemo: (role?: AppRole) => Promise<AppUser>;
   helpSignal: number;
   latestHelp: HelpRequest | null;
   dismissHelpAlert: () => void;
@@ -58,6 +58,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setDependents([]);
     setActiveId(null);
     setDependentsLoaded(false);
+    setLatestHelp(null);
   }, []);
 
   useEffect(() => {
@@ -131,8 +132,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user) return;
     return backend.subscribeHelpRequests((request) => {
-      setLatestHelp(request);
+      // Novos pedidos e reconhecimentos atualizam os contadores e os alertas.
       setHelpSignal((value) => value + 1);
+      if (request.acknowledgedAt) {
+        // Se o alerta em exibição era desse pedido, ele já foi acolhido.
+        setLatestHelp((current) => (current?.id === request.id ? null : current));
+      } else {
+        setLatestHelp(request);
+      }
     });
   }, [backend, user]);
 
@@ -144,8 +151,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(
-    async (email: string, password: string) => {
-      const current = await backend.signIn(email, password);
+    async (email: string, password: string, role?: AppRole) => {
+      const current = await backend.signIn(email, password, role);
       setUser(current);
       return current;
     },
@@ -153,8 +160,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const signUp = useCallback(
-    async (name: string, email: string, password: string) => {
-      const result = await backend.signUp(name, email, password);
+    async (input: SignUpInput) => {
+      const result = await backend.signUp(input);
       // Sem sessão (e-mail ainda não confirmado), não consideramos o usuário
       // conectado: ele precisa confirmar o cadastro antes de entrar.
       if (result.user && !result.needsConfirmation) setUser(result.user);
@@ -169,11 +176,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     resetSignedOut();
   }, [backend, resetSignedOut]);
 
-  const enterDemo = useCallback(async () => {
-    const current = await backend.signIn("familia@conectatea.app", "demo");
-    setUser(current);
-    return current;
-  }, [backend]);
+  const enterDemo = useCallback(
+    async (role: AppRole = "responsavel") => {
+      const email = role === "dependente" ? "lia@conectatea.app" : "familia@conectatea.app";
+      const current = await backend.signIn(email, "demo", role);
+      setUser(current);
+      return current;
+    },
+    [backend],
+  );
 
   const dismissHelpAlert = useCallback(() => setLatestHelp(null), []);
 
@@ -240,6 +251,18 @@ export function friendlyAuthError(error: unknown): string {
   }
   if (/password should be at least/i.test(message)) {
     return "A senha precisa ter pelo menos 6 caracteres.";
+  }
+  if (/new password should be different|same as the old password/i.test(message)) {
+    return "A nova senha precisa ser diferente da senha atual.";
+  }
+  if (/weak.?password|password is too weak/i.test(message)) {
+    return "Escolha uma senha mais forte, com letras e números.";
+  }
+  if (/invalid or has expired|email link is invalid|token has expired|otp_expired/i.test(message)) {
+    return "O link expirou ou é inválido. Solicite um novo e-mail de recuperação.";
+  }
+  if (/auth session missing|session.*missing|not authenticated/i.test(message)) {
+    return "Sessão de recuperação não encontrada. Solicite um novo link.";
   }
   if (/rate limit/i.test(message)) return "Muitas tentativas. Aguarde um instante e tente novamente.";
   if (/network|fetch/i.test(message)) return "Não foi possível conectar. Verifique sua internet.";

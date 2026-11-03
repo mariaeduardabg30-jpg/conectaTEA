@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Plus, Settings2 } from "lucide-react";
+import { Check, ChevronDown, Settings2 } from "lucide-react";
 import Link from "next/link";
 import { useApp } from "@/lib/data/provider";
 import { readableTextColor, withAlpha } from "@/lib/theme";
 
-export function DependentSwitcher({ manageHref }: { manageHref?: string }) {
+export function DependentSwitcher({
+  manageHref,
+  canManage = false,
+}: {
+  manageHref?: string;
+  canManage?: boolean;
+}) {
   const { dependents, activeDependent, setActiveDependentId } = useApp();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -28,6 +34,25 @@ export function DependentSwitcher({ manageHref }: { manageHref?: string }) {
   }, [open]);
 
   if (!activeDependent) return null;
+
+  // O dependente tem um único perfil: mostramos só o crachá, sem menu.
+  if (!canManage && dependents.length <= 1) {
+    return (
+      <div className="flex min-h-11 items-center gap-2.5 rounded-full border border-line bg-surface py-1.5 pl-1.5 pr-3.5">
+        <span
+          className="flex size-8 items-center justify-center rounded-full text-lg"
+          style={{
+            backgroundColor: activeDependent.color,
+            color: readableTextColor(activeDependent.color),
+          }}
+          aria-hidden
+        >
+          {activeDependent.avatar}
+        </span>
+        <span className="text-sm font-bold text-ink">{activeDependent.name}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="relative" ref={containerRef}>
@@ -93,7 +118,7 @@ export function DependentSwitcher({ manageHref }: { manageHref?: string }) {
               </button>
             );
           })}
-          {manageHref && (
+          {canManage && manageHref && (
             <div className="mt-1 border-t border-line pt-1">
               <Link
                 href={manageHref}
@@ -102,18 +127,6 @@ export function DependentSwitcher({ manageHref }: { manageHref?: string }) {
               >
                 <Settings2 className="size-4" aria-hidden />
                 Gerenciar dependentes
-              </Link>
-            </div>
-          )}
-          {!manageHref && (
-            <div className="mt-1 border-t border-line pt-1">
-              <Link
-                href="/responsavel/dependentes"
-                onClick={() => setOpen(false)}
-                className="flex items-center gap-2 rounded-2xl px-3 py-2.5 text-sm font-bold text-ink-soft hover:bg-surface-2"
-              >
-                <Plus className="size-4" aria-hidden />
-                Adicionar dependente
               </Link>
             </div>
           )}

@@ -1,6 +1,7 @@
 import type { Backend } from "@/lib/data/backend";
 import { addDays, startOfWeek, toDateKey } from "@/lib/date";
 import type {
+  AppRole,
   AppUser,
   Dependent,
   DependentInput,
@@ -12,12 +13,18 @@ import type {
   TaskCompletion,
 } from "@/lib/types";
 
-const DB_KEY = "conectatea.demo.db.v1";
-const SESSION_KEY = "conectatea.demo.session.v1";
+const DB_KEY = "conectatea.demo.db.v2";
+const SESSION_KEY = "conectatea.demo.session.v2";
+const ACCOUNTS_KEY = "conectatea.demo.accounts.v1";
 const HELP_CHANNEL = "conectatea.help";
 
+/** O dono do perfil fica só no demo; o app não precisa dele na interface. */
+type DemoDependent = Dependent & { ownerId: string | null };
+
+type DemoAccount = AppUser & { password: string };
+
 type DemoDatabase = {
-  dependents: Dependent[];
+  dependents: DemoDependent[];
   routineItems: RoutineItem[];
   completions: TaskCompletion[];
   emotions: EmotionLog[];
@@ -66,20 +73,26 @@ function makeRoutineItem(
 
 function seed(): DemoDatabase {
   const today = new Date();
-  const lia: Dependent = {
+  const lia: DemoDependent = {
     id: "dep-lia",
     name: "Lia",
     avatar: "🦋",
     color: "#C9B8EA",
-    birthDate: "2014-03-18",
+    email: "lia@conectatea.app",
+    age: 12,
+    userId: null,
+    ownerId: "demo-responsavel",
     createdAt: iso(120, 9),
   };
-  const miguel: Dependent = {
+  const miguel: DemoDependent = {
     id: "dep-miguel",
     name: "Miguel",
     avatar: "🦖",
     color: "#9FD3C2",
-    birthDate: "2016-09-02",
+    email: "miguel@conectatea.app",
+    age: 10,
+    userId: null,
+    ownerId: "demo-responsavel",
     createdAt: iso(110, 9),
   };
 
@@ -301,8 +314,158 @@ function writeSession(user: DemoSession | null): void {
   else window.localStorage.removeItem(SESSION_KEY);
 }
 
-function defaultSession(email = "familia@conectatea.app", name = "Família Oliveira"): DemoSession {
-  return { id: "demo-responsavel", name, email, createdAt: new Date().toISOString() };
+function slugEmail(email: string): string {
+  return email.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function emailName(email: string, role: AppRole): string {
+  const local = email.split("@")[0]?.replace(/[._-]+/g, " ").trim();
+  if (!local) return role === "responsavel" ? "Responsável" : "Dependente";
+  if (role === "responsavel" && email.toLowerCase() === "familia@conectatea.app") {
+    return "Família Oliveira";
+  }
+  return local.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function makeSession(input: {
+  id?: string;
+  email: string;
+  name: string;
+  role: AppRole;
+  age: number | null;
+}): DemoSession {
+  return {
+    id: input.id ?? `demo-${input.role}-${slugEmail(input.email)}`,
+    name: input.name,
+    email: input.email,
+    role: input.role,
+    age: input.age,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function seedAccounts(): DemoAccount[] {
+  return [
+    {
+      id: "demo-responsavel",
+      name: "Família Oliveira",
+      email: "familia@conectatea.app",
+      role: "responsavel",
+      age: null,
+      password: "demo",
+    },
+    {
+      id: "demo-dependente-lia",
+      name: "Lia",
+      email: "lia@conectatea.app",
+      role: "dependente",
+      age: 12,
+      password: "demo",
+    },
+    {
+      id: "demo-dependente-miguel",
+      name: "Miguel",
+      email: "miguel@conectatea.app",
+      role: "dependente",
+      age: 10,
+      password: "demo",
+    },
+  ];
+}
+
+function readAccounts(): DemoAccount[] {
+  if (typeof window === "undefined") return seedAccounts();
+  try {
+    const raw = window.localStorage.getItem(ACCOUNTS_KEY);
+    if (!raw) {
+      const initial = seedAccounts();
+      window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(initial));
+      return initial;
+    }
+    return JSON.parse(raw) as DemoAccount[];
+  } catch {
+    return seedAccounts();
+  }
+}
+
+function writeAccounts(accounts: DemoAccount[]): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+}
+
+/**
+ * No demo, cada dependente precisa de um perfil para abrir a própria área.
+ * Se o responsável já criou um perfil com o mesmo e-mail, ele é vinculado;
+ * caso contrário, o perfil é criado na hora.
+ */
+function ensureDependentProfile(user: DemoSession): void {
+  const db = readDb();
+  const email = user.email.toLowerCase();
+  const existing = db.dependents.find(
+    (dependent) =>
+      dependent.userId === user.id ||
+      (dependent.email?.toLowerCase() === email && !dependent.userId),
+  );
+
+  if (existing) {
+    if (!existing.userId) {
+      existing.userId = user.id;
+      writeDb(db);
+    }
+    return;
+  }
+
+  db.dependents.push({
+    id: uid(),
+    name: user.name,
+    avatar: "🌱",
+    color: "#9FD3C2",
+    email: user.email,
+    age: user.age,
+    userId: user.id,
+    ownerId: null,
+    createdAt: new Date().toISOString(),
+  });
+  writeDb(db);
+}
+
+function publicDependent(dependent: DemoDependent): Dependent {
+  return {
+    id: dependent.id,
+    name: dependent.name,
+    avatar: dependent.avatar,
+    color: dependent.color,
+    email: dependent.email,
+    age: dependent.age,
+    userId: dependent.userId,
+    createdAt: dependent.createdAt,
+  };
+}
+
+function validateSignUp(input: {
+  role: AppRole;
+  name: string;
+  email: string;
+  password: string;
+  age?: number | null;
+}): void {
+  if (input.name.trim().length < 2) throw new Error("Informe seu nome.");
+  if (!input.email.trim() || !input.email.includes("@")) {
+    throw new Error("Informe um e-mail válido.");
+  }
+  if (input.password.trim().length < 4) {
+    throw new Error("A senha precisa ter pelo menos 4 caracteres.");
+  }
+  if (input.role === "dependente") {
+    if (
+      typeof input.age !== "number" ||
+      !Number.isInteger(input.age) ||
+      input.age < 0 ||
+      input.age > 130
+    ) {
+      throw new Error("Informe uma idade válida.");
+    }
+  }
 }
 
 const delay = (ms = 90) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -325,58 +488,133 @@ export function createDemoBackend(): Backend {
       await delay(40);
       const session = readSession();
       if (!session) return null;
-      return { id: session.id, name: session.name, email: session.email };
+      return {
+        id: session.id,
+        name: session.name,
+        email: session.email,
+        role: session.role,
+        age: session.age,
+      };
     },
 
     onAuthChange() {
       return () => undefined;
     },
 
-    async signIn(email, password) {
+    async signIn(email, password, role) {
       await delay(160);
-      if (!email.trim() || password.trim().length < 4) {
-        throw new Error("Informe um e-mail e uma senha com pelo menos 4 caracteres.");
+      const cleanEmail = email.trim();
+      if (!cleanEmail || !cleanEmail.includes("@") || password.trim().length < 4) {
+        throw new Error("Informe um e-mail válido e uma senha com pelo menos 4 caracteres.");
       }
-      const user = defaultSession(email.trim());
-      writeSession({ ...user, createdAt: new Date().toISOString() });
-      return user;
+
+      const accounts = readAccounts();
+      const account = accounts.find(
+        (item) => item.email.toLowerCase() === cleanEmail.toLowerCase(),
+      );
+
+      let user: DemoSession;
+      if (account) {
+        if (account.password !== password) throw new Error("E-mail ou senha incorretos.");
+        user = makeSession(account);
+      } else {
+        // A demonstração aceita qualquer e-mail/senha; o papel vem da aba escolhida.
+        const chosenRole: AppRole = role ?? "responsavel";
+        user = makeSession({
+          email: cleanEmail,
+          name: emailName(cleanEmail, chosenRole),
+          role: chosenRole,
+          age: null,
+        });
+      }
+
+      writeSession(user);
+      if (user.role === "dependente") ensureDependentProfile(user);
+      return { ...user };
     },
 
-    async signUp(name, email, password) {
+    async signUp(input) {
       await delay(160);
-      if (!name.trim()) throw new Error("Informe seu nome.");
-      if (!email.trim()) throw new Error("Informe um e-mail.");
-      if (password.trim().length < 4) {
-        throw new Error("A senha precisa ter pelo menos 4 caracteres.");
+      validateSignUp(input);
+      const cleanEmail = input.email.trim().toLowerCase();
+      const accounts = readAccounts();
+      if (accounts.some((account) => account.email.toLowerCase() === cleanEmail)) {
+        throw new Error("Este e-mail já está cadastrado. Tente entrar.");
       }
-      const user = defaultSession(email.trim(), name.trim());
-      writeSession({ ...user, createdAt: new Date().toISOString() });
-      return { user, needsConfirmation: false };
+
+      const user = makeSession({
+        email: cleanEmail,
+        name: input.name.trim(),
+        role: input.role,
+        age: input.role === "dependente" ? (input.age ?? null) : null,
+      });
+      accounts.push({ ...user, password: input.password });
+      writeAccounts(accounts);
+      writeSession(user);
+      if (user.role === "dependente") ensureDependentProfile(user);
+      return { user: { ...user }, needsConfirmation: false };
     },
 
     async signOut() {
       writeSession(null);
     },
 
+    async requestPasswordReset(email) {
+      await delay(160);
+      if (!email.trim() || !email.includes("@")) {
+        throw new Error("Informe um e-mail válido.");
+      }
+      // Demonstração: não há e-mail real para enviar.
+    },
+
+    async updatePassword(password) {
+      await delay(160);
+      if (password.trim().length < 4) {
+        throw new Error("A senha precisa ter pelo menos 4 caracteres.");
+      }
+    },
+
     async listDependents() {
       await delay(60);
-      return [...readDb().dependents].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      const session = readSession();
+      if (!session) return [];
+      const list = readDb().dependents.filter((dependent) => {
+        if (session.role === "dependente") {
+          return (
+            dependent.userId === session.id ||
+            (!dependent.userId &&
+              dependent.email?.toLowerCase() === session.email.toLowerCase())
+          );
+        }
+        return dependent.ownerId === session.id;
+      });
+      return list
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map(publicDependent);
     },
 
     async createDependent(input: DependentInput) {
       await delay(120);
+      const session = readSession();
+      if (!session) throw new Error("Entre novamente para continuar.");
+      if (session.role !== "responsavel") {
+        throw new Error("Apenas o responsável pode criar perfis de dependentes.");
+      }
       const db = readDb();
-      const dependent: Dependent = {
+      const dependent: DemoDependent = {
         id: uid(),
         name: input.name,
         avatar: input.avatar,
         color: input.color,
-        birthDate: input.birthDate,
+        email: input.email,
+        age: input.age,
+        userId: null,
+        ownerId: session.id,
         createdAt: new Date().toISOString(),
       };
       db.dependents.push(dependent);
       writeDb(db);
-      return dependent;
+      return publicDependent(dependent);
     },
 
     async updateDependent(id, input) {
@@ -384,9 +622,25 @@ export function createDemoBackend(): Backend {
       const db = readDb();
       const index = db.dependents.findIndex((dependent) => dependent.id === id);
       if (index < 0) throw new Error("Dependente não encontrado.");
-      db.dependents[index] = { ...db.dependents[index], ...input };
+      const accounts = readAccounts();
+      const linked = input.email
+        ? accounts.find(
+            (account) =>
+              account.role === "dependente" &&
+              account.email.toLowerCase() === input.email?.toLowerCase(),
+          )
+        : undefined;
+      db.dependents[index] = {
+        ...db.dependents[index],
+        name: input.name,
+        avatar: input.avatar,
+        color: input.color,
+        email: input.email,
+        age: input.age,
+        userId: linked?.id ?? db.dependents[index].userId,
+      };
       writeDb(db);
-      return db.dependents[index];
+      return publicDependent(db.dependents[index]);
     },
 
     async deleteDependent(id) {
@@ -539,6 +793,8 @@ export function createDemoBackend(): Backend {
       request.acknowledgedAt = new Date().toISOString();
       request.acknowledgedBy = byName;
       writeDb(db);
+      // Mantém outras abas e o alerta global em sincronia.
+      broadcastHelp(request);
       return request;
     },
 

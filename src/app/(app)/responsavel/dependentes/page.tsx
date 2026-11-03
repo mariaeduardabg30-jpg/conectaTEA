@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   CalendarDays,
+  Mail,
   PencilLine,
   Plus,
   ShieldCheck,
@@ -20,18 +21,6 @@ import { InlineSpinner } from "@/components/ui/page-header";
 import { useApp } from "@/lib/data/provider";
 import { readableTextColor, withAlpha } from "@/lib/theme";
 import type { Dependent } from "@/lib/types";
-
-function ageLabel(birthDate: string | null): string | null {
-  if (!birthDate) return null;
-  const birth = new Date(`${birthDate}T12:00:00`);
-  if (Number.isNaN(birth.getTime())) return null;
-  const today = new Date();
-  let age = today.getFullYear() - birth.getFullYear();
-  const monthDiff = today.getMonth() - birth.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) age -= 1;
-  if (age < 0) return null;
-  return age === 1 ? "1 ano" : `${age} anos`;
-}
 
 export default function DependentsPage() {
   const router = useRouter();
@@ -129,7 +118,6 @@ export default function DependentsPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {dependents.map((dependent) => {
-            const age = ageLabel(dependent.birthDate);
             const selected = activeDependent?.id === dependent.id;
             return (
               <article
@@ -185,10 +173,24 @@ export default function DependentsPage() {
                         </span>
                       )}
                     </div>
-                    <p className="mt-1 flex items-center gap-1.5 text-xs font-bold text-muted">
-                      <CalendarDays className="size-3.5" aria-hidden />
-                      {age ?? "Data de nascimento não informada"}
-                    </p>
+                    {dependent.age != null && (
+                      <p className="mt-1 flex items-center gap-1.5 text-xs font-bold text-muted">
+                        <CalendarDays className="size-3.5" aria-hidden />
+                        {dependent.age === 1 ? "1 ano" : `${dependent.age} anos`}
+                      </p>
+                    )}
+                    {dependent.email && (
+                      <p className="mt-1 flex items-center gap-1.5 truncate text-xs font-bold text-muted">
+                        <Mail className="size-3.5 shrink-0" aria-hidden />
+                        <span className="truncate">{dependent.email}</span>
+                      </p>
+                    )}
+                    {dependent.age == null && !dependent.email && (
+                      <p className="mt-1 flex items-center gap-1.5 text-xs font-bold text-muted">
+                        <CalendarDays className="size-3.5" aria-hidden />
+                        Idade e e-mail não informados
+                      </p>
+                    )}
                   </div>
 
                   <div className="mt-5 flex gap-2">

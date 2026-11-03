@@ -1,5 +1,5 @@
 import { getSupabase } from "@/lib/supabase/client";
-import type { Backend, SignUpResult } from "@/lib/data/backend";
+import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import type {
   AppUser,
   Dependent,
@@ -22,12 +22,19 @@ const number = (value: unknown, fallback = 0): number =>
 const nullableText = (value: unknown): string | null =>
   typeof value === "string" && value.length > 0 ? value : null;
 
+const nullableAge = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : null;
+};
+
 function mapUser(user: {
   id: string;
   email?: string | null;
   user_metadata?: Record<string, unknown>;
 }): AppUser {
   const metadataName = user.user_metadata?.name;
+  const metadataRole = user.user_metadata?.role;
   return {
     id: user.id,
     name:
@@ -35,6 +42,8 @@ function mapUser(user: {
         ? metadataName
         : (user.email?.split("@")[0] ?? "Responsável"),
     email: user.email ?? "",
+    role: metadataRole === "dependente" ? "dependente" : "responsavel",
+    age: nullableAge(user.user_metadata?.age),
   };
 }
 
@@ -44,7 +53,9 @@ function mapDependent(row: Row): Dependent {
     name: text(row.name, "Dependente"),
     avatar: text(row.avatar, "🌱"),
     color: text(row.color, "#9FD3C2"),
-    birthDate: nullableText(row.birth_date),
+    email: nullableText(row.email),
+    age: nullableAge(row.age),
+    userId: nullableText(row.user_id),
     createdAt: text(row.created_at, new Date().toISOString()),
   };
 }
@@ -143,12 +154,18 @@ export function createSupabaseBackend(): Backend {
       return mapUser(data.user);
     },
 
-    async signUp(name, email, password): Promise<SignUpResult> {
+    async signUp(input: SignUpInput): Promise<SignUpResult> {
       const client = getClient();
       const { data, error } = await client.auth.signUp({
-        email,
-        password,
-        options: { data: { name } },
+        email: input.email,
+        password: input.password,
+        options: {
+          data: {
+            name: input.name,
+            role: input.role,
+            ...(input.role === "dependente" ? { age: input.age ?? null } : {}),
+          },
+        },
       });
       if (error) fail(error);
       return {
@@ -160,6 +177,23 @@ export function createSupabaseBackend(): Backend {
     async signOut() {
       const client = getClient();
       await client.auth.signOut();
+    },
+
+    async requestPasswordReset(email) {
+      const client = getClient();
+      // O link do e-mail volta para a tela de definição de nova senha.
+      const redirectTo =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/redefinir-senha`
+          : undefined;
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
+      if (error) fail(error);
+    },
+
+    async updatePassword(password) {
+      const client = getClient();
+      const { error } = await client.auth.updateUser({ password });
+      if (error) fail(error);
     },
 
     async listDependents() {
@@ -182,7 +216,8 @@ export function createSupabaseBackend(): Backend {
           name: input.name,
           avatar: input.avatar,
           color: input.color,
-          birth_date: input.birthDate,
+          email: input.email,
+          age: input.age,
         })
         .select("*")
         .single();
@@ -198,7 +233,8 @@ export function createSupabaseBackend(): Backend {
           name: input.name,
           avatar: input.avatar,
           color: input.color,
-          birth_date: input.birthDate,
+          email: input.email,
+          age: input.age,
         })
         .eq("id", id)
         .select("*")
@@ -371,6 +407,11 @@ export function createSupabaseBackend(): Backend {
         .on(
           "postgres_changes",
           { event: "INSERT", schema: "public", table: "help_requests" },
+          (payload) => callback(mapHelpRequest(payload.new as Row)),
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "help_requests" },
           (payload) => callback(mapHelpRequest(payload.new as Row)),
         )
         .subscribe();

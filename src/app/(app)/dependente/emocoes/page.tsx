@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { EmotionBadge } from "@/components/emotion-badge";
 import { ErrorNote, LoadingBlock, PageHeader } from "@/components/ui/page-header";
+import type { Backend } from "@/lib/data/backend";
 import { useApp } from "@/lib/data/provider";
 import { playConfirmationTone } from "@/lib/audio/alerts";
 import { addDays, formatLongDate, formatTime, isToday, toDateKey } from "@/lib/date";
@@ -19,15 +20,16 @@ import { useAsync } from "@/lib/hooks/use-async";
 import { useClientNow } from "@/lib/hooks/use-client-now";
 import type { EmotionLog } from "@/lib/types";
 
+type EmotionCheckInProps = {
+  dependentId: string;
+  backend: Backend;
+  onCreated: (log: EmotionLog) => void;
+  onReset: () => void;
+};
+
 export default function DependentEmotionsPage() {
   const { backend, activeDependent } = useApp();
   const now = useClientNow();
-  const [selected, setSelected] = useState<string | null>(null);
-  const [intensity, setIntensity] = useState(3);
-  const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState<EmotionLog | null>(null);
 
   const loader = useCallback(
     () =>
@@ -64,41 +66,6 @@ export default function DependentEmotionsPage() {
     return [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   }, [logs]);
 
-  const save = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!activeDependent || !selected) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const created = await backend.createEmotion(activeDependent.id, {
-        emotion: selected,
-        intensity,
-        note,
-      });
-      setData([created, ...logs]);
-      setSaved(created);
-      setSelected(null);
-      setIntensity(3);
-      setNote("");
-      void playConfirmationTone();
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Não foi possível salvar sua emoção.",
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const reset = () => {
-    setSaved(null);
-    setSelected(null);
-    setIntensity(3);
-    setNote("");
-    setError(null);
-    reload();
-  };
-
   if (!activeDependent) return <LoadingBlock />;
 
   return (
@@ -113,156 +80,13 @@ export default function DependentEmotionsPage() {
 
       <div className="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
         <section className="card p-5 sm:p-6">
-          {saved ? (
-            <div className="flex flex-col items-center py-6 text-center">
-              <span className="flex size-20 items-center justify-center rounded-full bg-primary-soft text-primary">
-                <Save className="size-9" aria-hidden />
-              </span>
-              <h2 className="mt-4 font-display text-2xl font-black text-ink">Registro guardado</h2>
-              <p className="mt-1 text-sm text-muted">
-                {formatLongDate(new Date(saved.createdAt))} às {formatTime(saved.createdAt)}
-              </p>
-              <div className="mt-5 w-full max-w-md rounded-3xl bg-surface-2 p-5">
-                <div className="flex items-center justify-center gap-3">
-                  <span
-                    className="flex size-14 items-center justify-center rounded-full text-3xl"
-                    style={{ backgroundColor: getEmotion(saved.emotion).color }}
-                    aria-hidden
-                  >
-                    {getEmotion(saved.emotion).emoji}
-                  </span>
-                  <div className="text-left">
-                    <p className="font-display text-xl font-extrabold text-ink">
-                      {getEmotion(saved.emotion).label}
-                    </p>
-                    <p className="text-xs font-bold text-muted">
-                      Intensidade: {INTENSITY_LABELS[saved.intensity] ?? saved.intensity}
-                    </p>
-                  </div>
-                </div>
-                {saved.note && (
-                  <p className="mt-4 rounded-2xl bg-surface px-4 py-3 text-left text-sm leading-relaxed text-ink-soft">
-                    “{saved.note}”
-                  </p>
-                )}
-              </div>
-              <div className="mt-6 flex w-full max-w-md flex-col gap-2 sm:flex-row">
-                <button type="button" onClick={reset} className="btn-primary flex-1">
-                  <RotateCcw className="size-4" aria-hidden />
-                  Registrar outra
-                </button>
-                <a href="#historico" className="btn-secondary flex-1">
-                  <History className="size-4" aria-hidden />
-                  Ver histórico
-                </a>
-              </div>
-            </div>
-          ) : (
-            <form onSubmit={save}>
-              <fieldset>
-                <legend className="font-display text-xl font-black text-ink">
-                  1. Como você está se sentindo?
-                </legend>
-                <p className="mt-1 text-sm text-muted">Toque na emoção mais parecida com agora.</p>
-                <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                  {EMOTIONS.map((emotion) => {
-                    const active = selected === emotion.id;
-                    return (
-                      <button
-                        key={emotion.id}
-                        type="button"
-                        onClick={() => setSelected(emotion.id)}
-                        aria-pressed={active}
-                        className={`flex min-h-[86px] flex-col items-center justify-center gap-1 rounded-2xl border-2 p-2.5 text-center transition ${
-                          active
-                            ? "scale-[1.02] border-ink/30 shadow-card"
-                            : "border-transparent hover:-translate-y-0.5 hover:shadow-card"
-                        }`}
-                        style={{ backgroundColor: emotion.color }}
-                      >
-                        <span className="text-3xl" aria-hidden>
-                          {emotion.emoji}
-                        </span>
-                        <span
-                          className="text-xs font-extrabold"
-                          style={{ color: emotion.text }}
-                        >
-                          {emotion.label}
-                        </span>
-                        <span className="hidden text-[0.6rem] leading-tight opacity-70 sm:block" style={{ color: emotion.text }}>
-                          {emotion.hint}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </fieldset>
-
-              {selected && (
-                <div className="mt-6 space-y-5 border-t border-line pt-5">
-                  <fieldset>
-                    <legend className="font-display text-lg font-extrabold text-ink">
-                      2. Quanto dessa emoção você sente?
-                    </legend>
-                    <div className="mt-3 flex items-center gap-2" role="group" aria-label="Intensidade da emoção">
-                      {[1, 2, 3, 4, 5].map((value) => {
-                        const active = intensity === value;
-                        const size = 38 + value * 5;
-                        return (
-                          <button
-                            key={value}
-                            type="button"
-                            onClick={() => setIntensity(value)}
-                            aria-pressed={active}
-                            aria-label={`Intensidade ${value} de 5: ${INTENSITY_LABELS[value]}`}
-                            className={`flex items-center justify-center rounded-full border-2 font-display text-sm font-black transition ${
-                              active
-                                ? "border-primary bg-primary text-white"
-                                : "border-line-strong bg-surface text-ink-soft hover:border-primary/40"
-                            }`}
-                            style={{ width: size, height: size }}
-                          >
-                            {value}
-                          </button>
-                        );
-                      })}
-                      <span className="ml-1 text-xs font-bold text-muted">
-                        {INTENSITY_LABELS[intensity]}
-                      </span>
-                    </div>
-                  </fieldset>
-
-                  <div>
-                    <label htmlFor="emotion-note" className="label">
-                      3. Quer contar o que aconteceu? <span className="font-normal text-muted">(opcional)</span>
-                    </label>
-                    <textarea
-                      id="emotion-note"
-                      className="input min-h-28 resize-y"
-                      placeholder="Ex.: Teve muito barulho na escola e eu fiquei sobrecarregada."
-                      value={note}
-                      onChange={(event) => setNote(event.target.value)}
-                      maxLength={280}
-                    />
-                    <p className="mt-1 text-right text-[0.68rem] font-bold text-muted">
-                      {note.length}/280
-                    </p>
-                  </div>
-
-                  {error && <ErrorNote>{error}</ErrorNote>}
-
-                  <button type="submit" disabled={saving} className="btn-primary min-h-12 w-full text-base">
-                    <Save className="size-5" aria-hidden />
-                    {saving ? "Salvando…" : "Salvar meu registro"}
-                  </button>
-                  <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted">
-                    <ShieldCheck className="size-3.5" aria-hidden />
-                    Seu responsável poderá ver este registro para acompanhar você.
-                  </p>
-                </div>
-              )}
-            </form>
-          )}
+          <EmotionCheckIn
+            key={activeDependent.id}
+            dependentId={activeDependent.id}
+            backend={backend}
+            onCreated={(created) => setData([created, ...logs])}
+            onReset={reload}
+          />
         </section>
 
         <div className="space-y-4">
@@ -393,5 +217,216 @@ export default function DependentEmotionsPage() {
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * Formulário de registro emocional.
+ *
+ * Fica em um componente separado e é montado com `key={activeDependent.id}`
+ * para que trocar o perfil ativo descarte rascunho, confirmação e erros
+ * do dependente anterior.
+ */
+function EmotionCheckIn({
+  dependentId,
+  backend,
+  onCreated,
+  onReset,
+}: EmotionCheckInProps) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [intensity, setIntensity] = useState(3);
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<EmotionLog | null>(null);
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selected) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const created = await backend.createEmotion(dependentId, {
+        emotion: selected,
+        intensity,
+        note,
+      });
+      onCreated(created);
+      setSaved(created);
+      setSelected(null);
+      setIntensity(3);
+      setNote("");
+      void playConfirmationTone();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Não foi possível salvar sua emoção.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = () => {
+    setSaved(null);
+    setSelected(null);
+    setIntensity(3);
+    setNote("");
+    setError(null);
+    onReset();
+  };
+
+  if (saved) {
+    return (
+      <div className="flex flex-col items-center py-6 text-center">
+        <span className="flex size-20 items-center justify-center rounded-full bg-primary-soft text-primary">
+          <Save className="size-9" aria-hidden />
+        </span>
+        <h2 className="mt-4 font-display text-2xl font-black text-ink">Registro guardado</h2>
+        <p className="mt-1 text-sm text-muted">
+          {formatLongDate(new Date(saved.createdAt))} às {formatTime(saved.createdAt)}
+        </p>
+        <div className="mt-5 w-full max-w-md rounded-3xl bg-surface-2 p-5">
+          <div className="flex items-center justify-center gap-3">
+            <span
+              className="flex size-14 items-center justify-center rounded-full text-3xl"
+              style={{ backgroundColor: getEmotion(saved.emotion).color }}
+              aria-hidden
+            >
+              {getEmotion(saved.emotion).emoji}
+            </span>
+            <div className="text-left">
+              <p className="font-display text-xl font-extrabold text-ink">
+                {getEmotion(saved.emotion).label}
+              </p>
+              <p className="text-xs font-bold text-muted">
+                Intensidade: {INTENSITY_LABELS[saved.intensity] ?? saved.intensity}
+              </p>
+            </div>
+          </div>
+          {saved.note && (
+            <p className="mt-4 rounded-2xl bg-surface px-4 py-3 text-left text-sm leading-relaxed text-ink-soft">
+              “{saved.note}”
+            </p>
+          )}
+        </div>
+        <div className="mt-6 flex w-full max-w-md flex-col gap-2 sm:flex-row">
+          <button type="button" onClick={reset} className="btn-primary flex-1">
+            <RotateCcw className="size-4" aria-hidden />
+            Registrar outra
+          </button>
+          <a href="#historico" className="btn-secondary flex-1">
+            <History className="size-4" aria-hidden />
+            Ver histórico
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={save}>
+      <fieldset>
+        <legend className="font-display text-xl font-black text-ink">
+          1. Como você está se sentindo?
+        </legend>
+        <p className="mt-1 text-sm text-muted">Toque na emoção mais parecida com agora.</p>
+        <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {EMOTIONS.map((emotion) => {
+            const active = selected === emotion.id;
+            return (
+              <button
+                key={emotion.id}
+                type="button"
+                onClick={() => setSelected(emotion.id)}
+                aria-pressed={active}
+                className={`flex min-h-[86px] flex-col items-center justify-center gap-1 rounded-2xl border-2 p-2.5 text-center transition ${
+                  active
+                    ? "scale-[1.02] border-ink/30 shadow-card"
+                    : "border-transparent hover:-translate-y-0.5 hover:shadow-card"
+                }`}
+                style={{ backgroundColor: emotion.color }}
+              >
+                <span className="text-3xl" aria-hidden>
+                  {emotion.emoji}
+                </span>
+                <span
+                  className="text-xs font-extrabold"
+                  style={{ color: emotion.text }}
+                >
+                  {emotion.label}
+                </span>
+                <span className="hidden text-[0.6rem] leading-tight opacity-70 sm:block" style={{ color: emotion.text }}>
+                  {emotion.hint}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </fieldset>
+
+      {selected && (
+        <div className="mt-6 space-y-5 border-t border-line pt-5">
+          <fieldset>
+            <legend className="font-display text-lg font-extrabold text-ink">
+              2. Quanto dessa emoção você sente?
+            </legend>
+            <div className="mt-3 flex items-center gap-2" role="group" aria-label="Intensidade da emoção">
+              {[1, 2, 3, 4, 5].map((value) => {
+                const active = intensity === value;
+                const size = 38 + value * 5;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setIntensity(value)}
+                    aria-pressed={active}
+                    aria-label={`Intensidade ${value} de 5: ${INTENSITY_LABELS[value]}`}
+                    className={`flex items-center justify-center rounded-full border-2 font-display text-sm font-black transition ${
+                      active
+                        ? "border-primary bg-primary text-white"
+                        : "border-line-strong bg-surface text-ink-soft hover:border-primary/40"
+                    }`}
+                    style={{ width: size, height: size }}
+                  >
+                    {value}
+                  </button>
+                );
+              })}
+              <span className="ml-1 text-xs font-bold text-muted">
+                {INTENSITY_LABELS[intensity]}
+              </span>
+            </div>
+          </fieldset>
+
+          <div>
+            <label htmlFor="emotion-note" className="label">
+              3. Quer contar o que aconteceu? <span className="font-normal text-muted">(opcional)</span>
+            </label>
+            <textarea
+              id="emotion-note"
+              className="input min-h-28 resize-y"
+              placeholder="Ex.: Teve muito barulho na escola e eu fiquei sobrecarregada."
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              maxLength={280}
+            />
+            <p className="mt-1 text-right text-[0.68rem] font-bold text-muted">
+              {note.length}/280
+            </p>
+          </div>
+
+          {error && <ErrorNote>{error}</ErrorNote>}
+
+          <button type="submit" disabled={saving} className="btn-primary min-h-12 w-full text-base">
+            <Save className="size-5" aria-hidden />
+            {saving ? "Salvando…" : "Salvar meu registro"}
+          </button>
+          <p className="flex items-center justify-center gap-1.5 text-center text-xs text-muted">
+            <ShieldCheck className="size-3.5" aria-hidden />
+            Seu responsável poderá ver este registro para acompanhar você.
+          </p>
+        </div>
+      )}
+    </form>
   );
 }

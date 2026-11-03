@@ -4,8 +4,15 @@ Plataforma acolhedora para pessoas com Transtorno do Espectro Autista (TEA) e se
 O ConectaTEA reúne rotina, sons calmantes, registro de emoções e pedidos de ajuda em um só lugar,
 com uma interface tranquila, previsível e acessível.
 
-O projeto foi pensado para uso em **dispositivo compartilhado**: o responsável entra uma vez e,
-na mesma sessão, cada dependente abre o seu próprio espaço.
+O projeto tem **dois tipos de conta**:
+
+- **Responsável** — acompanha a rotina, as emoções e os pedidos de ajuda de todos os seus
+  dependentes.
+- **Dependente** — entra com o próprio e-mail e senha e usa apenas o seu espaço.
+
+O responsável também pode abrir a área de um dependente no mesmo dispositivo, o que ajuda no uso
+de **tablet ou computador compartilhado**. Quando o dependente tem conta própria, o perfil é
+vinculado pelo e-mail e os dois acessos veem os mesmos dados.
 
 ---
 
@@ -30,7 +37,10 @@ na mesma sessão, cada dependente abre o seu próprio espaço.
   semana.
 - **Ajuda** — pedidos pendentes com alerta visual e sonoro em tempo real, identificação de quem
   pediu, horário e ação de reconhecer/acolher.
-- **Dependentes** — criação e edição de vários perfis, com avatar, cor e data de nascimento.
+- **Dependentes** — criação e edição de vários perfis, com avatar, cor, e-mail e idade. O e-mail é
+  o que vincula o perfil à conta do dependente.
+- **Acesso** — login separado para responsável e dependente, cadastro com os dados de cada papel e
+  recuperação de senha por e-mail (com Supabase).
 
 ### Acessibilidade e cuidado no design
 
@@ -71,12 +81,22 @@ Se as variáveis do Supabase **não** estiverem definidas, o app inicia automati
 **modo demonstração**:
 
 - Os dados ficam no `localStorage` do navegador.
-- Qualquer e-mail e senha com **4 caracteres ou mais** entram no app.
-- Também há o botão **“Entrar na demonstração”** na tela de login.
+- A tela de entrada tem abas separadas: **Sou responsável** e **Sou dependente**.
+- Qualquer e-mail e senha com **4 caracteres ou mais** entram no app (o cadastro do dependente
+  pede também a idade).
+- Também há o botão **“Entrar com dados de exemplo”** em cada aba.
 - A base de exemplo já vem com dois dependentes (**Lia** e **Miguel**), rotina, emoções e um
   pedido de ajuda pendente.
-- Abra a mesma demonstração em duas abas para ver o alerta de ajuda chegar em tempo real na área
-  do responsável (via `BroadcastChannel`).
+- Contas de exemplo (senha `demo` em todas):
+
+  | Papel       | E-mail                  |
+  | ----------- | ----------------------- |
+  | Responsável | `familia@conectatea.app` |
+  | Dependente  | `lia@conectatea.app`     |
+  | Dependente  | `miguel@conectatea.app`  |
+
+- Abra a demonstração em duas abas (uma como responsável, outra como dependente) para ver o alerta
+  de ajuda chegar em tempo real na área do responsável (via `BroadcastChannel`).
 
 Para começar do zero, limpe os dados do site no navegador (ou remova as chaves
 `conectatea.demo.*` do `localStorage`).
@@ -109,23 +129,48 @@ npm run lint    # análise estática (ESLint)
    NEXT_PUBLIC_SUPABASE_ANON_KEY=sua-chave-anon-publica
    ```
 
-5. Reinicie o servidor de desenvolvimento.
+5. Em **Authentication → URL Configuration**, adicione a URL de retorno da recuperação de senha
+   em **Redirect URLs**, por exemplo:
 
-Com as variáveis definidas, o app passa a usar o Supabase automaticamente. O nome exibido do
-responsável é lido de `user_metadata.name` (definido no cadastro).
+   ```text
+   http://localhost:3000/redefinir-senha
+   https://conecatea.com/redefinir-senha
+   ```
+
+6. Reinicie o servidor de desenvolvimento.
+
+Com as variáveis definidas, o app passa a usar o Supabase automaticamente. O nome, o papel
+(`responsavel` ou `dependente`) e a idade são enviados no cadastro via `user_metadata`; o gatilho
+`handle_new_user` cria o perfil e, no caso do dependente, o espaço dele no banco.
+
+Para conferir se o schema foi aplicado corretamente, rode
+[`supabase/check_setup.sql`](./supabase/check_setup.sql) — ele é somente leitura e mostra `ok` ou
+`FALTANDO` para cada item esperado. Se precisar recomeçar em um projeto de teste, use
+[`supabase/reset.sql`](./supabase/reset.sql) (apaga os dados do app, não os usuários do Auth).
 
 ### Modelo de dados
 
 | Tabela              | Conteúdo                                                                 |
 | ------------------- | ------------------------------------------------------------------------ |
-| `dependents`        | Perfis dos dependentes. `owner_id` referencia `auth.users`.               |
+| `profiles`          | Uma linha por conta de login: `role`, nome, e-mail e idade.               |
+| `dependents`        | Espaço de cada dependente. `owner_id` é o responsável; `user_id` é a conta de login do dependente (quando existe). |
 | `routine_items`     | Atividades da rotina, com horário, dias da semana e duração.             |
 | `task_completions`  | Conclusões por atividade e data (única por `routine_item_id` + data).    |
 | `emotion_logs`      | Registros emocionais com intensidade, motivo e data/hora.                |
 | `help_requests`     | Pedidos de ajuda, com data/hora e reconhecimento pelo responsável.       |
 
-A segurança é garantida por **Row Level Security (RLS)**: o responsável só acessa os dados dos
-dependentes que lhe pertencem. A função `is_owner_of_dependent(uuid)` concentra essa verificação.
+A segurança é garantida por **Row Level Security (RLS)**:
+
+- `profiles`: cada conta lê e edita apenas o próprio perfil.
+- `dependents`: o responsável acessa os perfis que criou (`owner_id`) e o dependente acessa o
+  próprio espaço (`user_id`).
+- Demais tabelas: o acesso é liberado pela função `can_access_dependent(uuid)`, que aplica a mesma
+  regra. O nome antigo `is_owner_of_dependent(uuid)` continua existindo como alias.
+
+O vínculo entre o perfil criado pelo responsável e a conta do dependente é feito pelo e-mail:
+ao criar a conta, o gatilho `handle_new_user` procura um `dependents` sem `user_id` com o mesmo
+e-mail e o vincula. Se o perfil for criado depois, o gatilho `link_dependent_account` faz o
+caminho inverso.
 
 O alerta em tempo real usa a publicação `supabase_realtime` na tabela `help_requests`
 (`REPLICA IDENTITY FULL`).
@@ -145,6 +190,8 @@ src/
 ├─ app/
 │  ├─ (app)/                 # área autenticada (dependente e responsável)
 │  ├─ entrar/                # login, cadastro e escolha de perfil
+│  ├─ recuperar-senha/       # pedido de link de recuperação
+│  ├─ redefinir-senha/       # definição da nova senha após o link
 │  ├─ layout.tsx             # fontes, metadados e provider global
 │  └─ page.tsx               # landing page
 ├─ components/               # componentes de interface e formulários
@@ -155,7 +202,9 @@ src/
 │  ├─ date.ts, emotions.ts   # utilitários de datas e emoções
 │  └─ types.ts               # tipos compartilhados
 supabase/
-└─ schema.sql                # schema completo do banco
+├─ schema.sql                # schema completo do banco (v2, com papéis)
+├─ check_setup.sql           # verificação somente leitura da estrutura
+└─ reset.sql                 # reset destrutivo para projetos de teste
 ```
 
 ### Arquitetura do backend
@@ -172,9 +221,12 @@ Os componentes consomem apenas o contexto `AppProvider`, sem saber qual adaptado
 
 ## ⚠️ Limitações conhecidas
 
-- **Dispositivo compartilhado:** o dependente não tem conta própria. O acesso usa a sessão do
-  responsável, e a troca de perfil é feita pelo seletor no topo da tela. Para uso em vários
-  dispositivos com contas separadas, seria necessário evoluir o modelo de autenticação.
+- **Dois tipos de conta:** responsável e dependente têm cadastros e telas separadas. O dependente
+  usa apenas o próprio espaço; o responsável acompanha os dependentes que criou. Cada conta vê
+  somente os dados permitidos pelo RLS.
+- **Perfis sem conta:** o responsável pode criar um perfil de dependente antes de o dependente ter
+  login. Enquanto isso, ele abre esse espaço pelo seletor de perfil. Depois, basta cadastrar a
+  conta com o mesmo e-mail para vincular.
 - **Modo demonstração:** os dados ficam apenas no navegador e não são sincronizados entre
   dispositivos (o alerta de ajuda em tempo real funciona entre abas do mesmo navegador).
 - **Sons:** são gerados em tempo real pelo navegador; alguns ambientes (por exemplo, navegadores

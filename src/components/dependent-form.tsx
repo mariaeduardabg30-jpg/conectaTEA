@@ -23,7 +23,8 @@ export function DependentFormModal({
   const [name, setName] = useState(dependent?.name ?? "");
   const [avatar, setAvatar] = useState<string>(dependent?.avatar ?? DEPENDENT_AVATARS[0]);
   const [color, setColor] = useState<string>(dependent?.color ?? DEPENDENT_COLORS[0].value);
-  const [birthDate, setBirthDate] = useState(dependent?.birthDate ?? "");
+  const [email, setEmail] = useState(dependent?.email ?? "");
+  const [age, setAge] = useState(dependent?.age != null ? String(dependent.age) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,13 +35,31 @@ export function DependentFormModal({
       setError("Informe o nome do dependente.");
       return;
     }
+
+    const cleanEmail = email.trim();
+    if (cleanEmail && !cleanEmail.includes("@")) {
+      setError("Informe um e-mail válido.");
+      return;
+    }
+
+    let parsedAge: number | null = null;
+    if (age.trim()) {
+      const value = Number(age);
+      if (!Number.isInteger(value) || value < 0 || value > 130) {
+        setError("Informe uma idade válida.");
+        return;
+      }
+      parsedAge = value;
+    }
+
     setSaving(true);
     try {
       const input = {
         name: name.trim(),
         avatar,
         color,
-        birthDate: birthDate || null,
+        email: cleanEmail || null,
+        age: parsedAge,
       };
       if (dependent) await backend.updateDependent(dependent.id, input);
       else await backend.createDependent(input);
@@ -131,15 +150,38 @@ export function DependentFormModal({
         </div>
 
         <div>
-          <label htmlFor="dependent-birth" className="label">
-            Data de nascimento <span className="font-normal text-muted">(opcional)</span>
+          <label htmlFor="dependent-email" className="label">
+            E-mail do dependente <span className="font-normal text-muted">(opcional)</span>
           </label>
           <input
-            id="dependent-birth"
-            type="date"
+            id="dependent-email"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
             className="input"
-            value={birthDate}
-            onChange={(event) => setBirthDate(event.target.value)}
+            placeholder="lia@exemplo.com"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          <p className="mt-1.5 text-xs leading-relaxed text-muted">
+            Se o dependente criar a conta dele com este e-mail, os dois acessos são vinculados.
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="dependent-age" className="label">
+            Idade <span className="font-normal text-muted">(opcional)</span>
+          </label>
+          <input
+            id="dependent-age"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={130}
+            className="input"
+            placeholder="Ex.: 12"
+            value={age}
+            onChange={(event) => setAge(event.target.value)}
           />
         </div>
 

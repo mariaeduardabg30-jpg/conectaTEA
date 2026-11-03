@@ -53,18 +53,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { ready, user, mode, activeDependent, dependentsLoaded, signOut } = useApp();
-  const role: "responsavel" | "dependente" = pathname.startsWith("/responsavel")
+  const requestedRole: "responsavel" | "dependente" = pathname.startsWith("/responsavel")
     ? "responsavel"
     : "dependente";
-  const nav = role === "responsavel" ? RESPONSIBLE_NAV : DEPENDENT_NAV;
   const { data: helpRequests } = useHelpRequests();
   const pending = helpRequests.filter((request) => !request.acknowledgedAt).length;
 
   useEffect(() => {
-    if (ready && !user) router.replace("/entrar");
-  }, [ready, user, router]);
+    if (!ready) return;
+    if (!user) {
+      router.replace("/entrar");
+      return;
+    }
+    if (user.role !== requestedRole) {
+      router.replace(user.role === "dependente" ? "/dependente" : "/responsavel");
+    }
+  }, [ready, user, requestedRole, router]);
 
-  if (!ready || !user) return <LoadingScreen />;
+  if (!ready || !user || user.role !== requestedRole) return <LoadingScreen />;
+
+  const role = user.role;
+  const nav = role === "responsavel" ? RESPONSIBLE_NAV : DEPENDENT_NAV;
 
   const isActive = (item: NavItem) =>
     item.exact ? pathname === item.href : pathname.startsWith(item.href);
@@ -74,7 +83,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const switchArea =
     role === "responsavel"
       ? { href: "/dependente", label: "Abrir área do dependente" }
-      : { href: "/responsavel", label: "Ir para a área do responsável" };
+      : null;
 
   const logout = async () => {
     await signOut();
@@ -136,13 +145,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </p>
             </div>
           )}
-          <Link
-            href={switchArea.href}
-            className="flex items-center gap-2.5 rounded-2xl px-3 py-2.5 text-xs font-bold text-ink-soft transition hover:bg-surface-2"
-          >
-            <ArrowRightLeft className="size-4" aria-hidden />
-            {switchArea.label}
-          </Link>
+          {switchArea && (
+            <Link
+              href={switchArea.href}
+              className="flex items-center gap-2.5 rounded-2xl px-3 py-2.5 text-xs font-bold text-ink-soft transition hover:bg-surface-2"
+            >
+              <ArrowRightLeft className="size-4" aria-hidden />
+              {switchArea.label}
+            </Link>
+          )}
           <div className="flex items-center gap-2.5 rounded-2xl border border-line bg-surface px-3 py-2.5">
             <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary-soft font-display text-sm font-extrabold text-primary-strong">
               {user.name.slice(0, 1).toUpperCase()}
@@ -191,21 +202,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="flex items-center gap-2">
-              <DependentSwitcher manageHref={role === "responsavel" ? "/responsavel/dependentes" : undefined} />
-              {role === "responsavel" ? (
+              <DependentSwitcher
+                canManage={role === "responsavel"}
+                manageHref={role === "responsavel" ? "/responsavel/dependentes" : undefined}
+              />
+              {role === "responsavel" && (
                 <>
                   <AlertSoundToggle />
                   <NotificationBell pending={pending} />
                 </>
-              ) : (
-                <Link
-                  href="/responsavel"
-                  className="icon-button"
-                  aria-label="Ir para a área do responsável"
-                  title="Área do responsável"
-                >
-                  <ArrowRightLeft className="size-5" aria-hidden />
-                </Link>
               )}
               <button
                 type="button"
@@ -229,12 +234,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <EmptyState
                   emoji="🌱"
                   title="Seu perfil ainda não foi criado"
-                  description="Peça para o responsável criar seu perfil na área dele. Assim sua rotina, emoções e sons ficam guardados só para você."
+                  description="Peça para o responsável criar ou vincular seu perfil usando o seu e-mail. Assim sua rotina, emoções e sons ficam guardados só para você."
                   tone="primary"
                   action={
-                    <Link href="/responsavel/dependentes" className="btn-primary">
-                      Ir para a área do responsável
-                    </Link>
+                    <button type="button" onClick={logout} className="btn-secondary">
+                      Sair e entrar com outra conta
+                    </button>
                   }
                 />
               </div>

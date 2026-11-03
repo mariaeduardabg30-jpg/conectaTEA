@@ -1,4 +1,5 @@
 import type {
+  AppRole,
   AppUser,
   Dependent,
   DependentInput,
@@ -11,6 +12,15 @@ import type {
   TaskCompletion,
 } from "@/lib/types";
 
+export type SignUpInput = {
+  role: AppRole;
+  name: string;
+  email: string;
+  password: string;
+  /** Obrigatória no cadastro do dependente. */
+  age?: number | null;
+};
+
 export type SignUpResult = {
   user: AppUser | null;
   needsConfirmation: boolean;
@@ -20,9 +30,15 @@ export interface Backend {
   mode: "supabase" | "demo";
   getUser(): Promise<AppUser | null>;
   onAuthChange(callback: (user: AppUser | null) => void): () => void;
-  signIn(email: string, password: string): Promise<AppUser>;
-  signUp(name: string, email: string, password: string): Promise<SignUpResult>;
+  /**
+   * `role` só é usado pelo modo demonstração, que não tem banco para consultar
+   * o papel da conta. No Supabase o papel vem do perfil do usuário.
+   */
+  signIn(email: string, password: string, role?: AppRole): Promise<AppUser>;
+  signUp(input: SignUpInput): Promise<SignUpResult>;
   signOut(): Promise<void>;
+  requestPasswordReset(email: string): Promise<void>;
+  updatePassword(password: string): Promise<void>;
 
   listDependents(): Promise<Dependent[]>;
   createDependent(input: DependentInput): Promise<Dependent>;

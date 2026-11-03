@@ -1,11 +1,19 @@
 export type ColorValue = string;
 
+/** Papel da conta que está usando o app. */
+export type AppRole = "responsavel" | "dependente";
+
 export type Dependent = {
   id: string;
   name: string;
   avatar: string;
   color: ColorValue;
-  birthDate: string | null;
+  /** E-mail usado pelo dependente para entrar na própria conta. */
+  email: string | null;
+  /** Idade informada no cadastro. */
+  age: number | null;
+  /** Conta de login vinculada a este perfil (auth.users.id). */
+  userId: string | null;
   createdAt: string;
 };
 
@@ -51,6 +59,9 @@ export type AppUser = {
   id: string;
   name: string;
   email: string;
+  role: AppRole;
+  /** Idade informada pelo dependente no cadastro (null para responsáveis). */
+  age: number | null;
 };
 
 export type RoutineItemInput = {
@@ -65,7 +76,8 @@ export type DependentInput = {
   name: string;
   avatar: string;
   color: string;
-  birthDate: string | null;
+  email: string | null;
+  age: number | null;
 };
 
 export type EmotionInput = {
