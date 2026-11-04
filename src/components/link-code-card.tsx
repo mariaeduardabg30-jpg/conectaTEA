@@ -27,8 +27,13 @@ export function LinkCodeCard() {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
-  // O cartão só faz sentido para a conta do próprio dependente.
-  if (user?.role !== "dependente" || !dependent) return null;
+  // O cartão só faz sentido para a conta do próprio dependente ou para o
+  // responsável que está acompanhando este espaço pelo dispositivo (área do
+  // dependente). Sem isso, o responsável não conseguiria ver/pegar o código
+  // para vincular a conta.
+  if (!dependent || (user?.role !== "dependente" && user?.role !== "responsavel")) {
+    return null;
+  }
 
   const copy = async () => {
     if (!dependent.linkCode) return;
