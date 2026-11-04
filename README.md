@@ -37,17 +37,20 @@ vinculação** exibido na conta do dependente, que o responsável digita em **�
 
 - **Visão geral** — resumo do dia, progresso da rotina, emoções recentes e pedidos de ajuda.
 - **Vincular dependente** — campo para digitar o código exibido na conta do dependente; o banco
-  valida o código e cria o vínculo, persistindo entre sessões.
+  valida o código e cria o vínculo, persistindo entre sessões e entre dispositivos (com Supabase
+  configurado). Também é possível **adicionar pelo e-mail**, mas somente contas de dependente que
+  já existem.
 - **Emoções** — registros agrupados por dia, com motivos e resumo semanal.
 - **Rotina** — acompanhamento do que foi concluído e do que está pendente, por dependente e por
-  semana.
+  semana. O responsável também pode adicionar novas tarefas para o dependente diretamente por aqui.
 - **Ajuda** — pedidos pendentes com alerta visual e sonoro em tempo real, identificação de quem
   pediu, horário e ação de reconhecer/acolher.
 - **Notificações** — sino no topo com avisos de novas tarefas programadas, lembretes no horário
   programado e tarefas concluídas, com contador de não lidas e opção de ativá-las também em
   segundo plano (Web Push).
-- **Dependentes** — criação e edição de vários perfis, com avatar, cor, e-mail e idade. Perfis
-  também podem ser vinculados pelo código de vinculação a qualquer momento.
+- **Dependentes** — adição (somente de contas de dependente que já existem), edição e remoção de
+  perfis, com avatar, cor, e-mail e idade. Também podem ser vinculados pelo código de vinculação a
+  qualquer momento.
 - **Acesso** — somente contas criadas entram no app. Cadastro separado para responsável e
   dependente, recuperação de senha por e-mail (com Supabase) e redirecionamento para a tela de
   cadastro quando não há sessão.
@@ -255,7 +258,8 @@ Para conferir se o schema foi aplicado corretamente, rode
    - código de um dependente já vinculado a outro responsável → “Este dependente já está
      vinculado a outro responsável.”;
    - código válido → o espaço do dependente passa a pertencer ao responsável, com persistência
-     garantida pelo banco (sai e entra e o vínculo continua).
+     garantida pelo banco (sai e entra e o vínculo continua). Com o Supabase configurado, o código
+     funciona mesmo quando a conta do dependente foi criada em outro dispositivo ou navegador.
 4. Perfis já vinculados pelo e-mail continuam funcionando como antes; a vinculação por código é
    um caminho adicional, não substitui a anterior.
 
@@ -425,9 +429,10 @@ Os componentes consomem apenas o contexto `AppProvider`, sem saber qual adaptado
 - **Dois tipos de conta:** responsável e dependente têm cadastros e telas separadas. O dependente
   usa apenas o próprio espaço; o responsável acompanha os dependentes que criou. Cada conta vê
   somente os dados permitidos pelo RLS.
-- **Perfis sem conta:** o responsável pode criar um perfil de dependente antes de o dependente ter
-  login. Enquanto isso, ele abre esse espaço pelo seletor de perfil. Depois, basta cadastrar a
-  conta com o mesmo e-mail para vincular.
+- **Adicionar dependente:** só é possível adicionar uma conta de dependente que **já existe**. O
+  responsável informa o e-mail usado no cadastro do dependente; se não houver conta com esse
+  e-mail, a adição é recusada. Isso garante que o responsável consiga acompanhar e criar tarefas
+  para o dependente de verdade.
 - **Modo demonstração:** os dados ficam apenas no navegador e não são sincronizados entre
   dispositivos (as notificações em tempo real funcionam entre abas do mesmo navegador). O lembrete
   de tarefa no horário é gerado pelo app aberto; sem Supabase não há envio com o app fechado.

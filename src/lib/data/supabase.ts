@@ -300,60 +300,72 @@ export function createSupabaseBackend(): Backend {
       const client = getClient();
       const ownerId = await currentUserId();
       const email = input.email?.trim() || null;
-
-      // O dependente pode ter criado a própria conta antes do responsável.
-      // Nesse caso já existe uma linha sem owner_id e o e-mail é único; em
-      // vez de inserir outra, reivindicamos a linha existente.
-      if (email) {
-        const { data: claimed, error: claimError } = await client.rpc(
-          "claim_dependent_by_email",
-          { target_email: email },
+      if (!email) {
+        throw new Error(
+          "Informe o e-mail da conta do dependente. Só é possível adicionar quem já criou a conta.",
         );
-        const missingFunction =
-          claimError?.code === "PGRST202" ||
-          /could not find the function|does not exist|schema cache/i.test(
-            claimError?.message ?? "",
-          );
-        if (claimError && !missingFunction) fail(claimError);
-        const row = (Array.isArray(claimed) ? claimed[0] : claimed) as Row | null;
-        if (row?.id) {
-          const { data, error } = await client
-            .from("dependents")
-            .update({
-              name: input.name,
-              avatar: input.avatar,
-              color: input.color,
-              email,
-              age: input.age,
-            })
-            .eq("id", text(row.id))
-            .select("*")
-            .single();
-          if (error) fail(error);
-          return mapDependent(data as Row);
-        }
+      }
+
+      const details = {
+        name: input.name,
+        avatar: input.avatar,
+        color: input.color,
+        email,
+        age: input.age,
+      };
+
+      // Já vinculado a esta conta? Atualiza o perfil em vez de duplicar.
+      const { data: mine, error: mineError } = await client
+        .from("dependents")
+        .select("*")
+        .eq("owner_id", ownerId);
+      if (mineError) fail(mineError);
+      const alreadyLinked = ((mine ?? []) as Row[]).find(
+        (row) => nullableText(row.email)?.toLowerCase() === email.toLowerCase(),
+      );
+      if (alreadyLinked) {
+        const { data, error } = await client
+          .from("dependents")
+          .update(details)
+          .eq("id", text(alreadyLinked.id))
+          .select("*")
+          .single();
+        if (error) fail(error);
+        return mapDependent(data as Row);
+      }
+
+      // O dependente precisa ter criado a própria conta antes. A linha dele
+      // fica com owner_id nulo e é reivindicada aqui, por e-mail.
+      const { data: claimed, error: claimError } = await client.rpc(
+        "claim_dependent_by_email",
+        { target_email: email },
+      );
+      const missingFunction =
+        claimError?.code === "PGRST202" ||
+        /could not find the function|does not exist|schema cache/i.test(
+          claimError?.message ?? "",
+        );
+      if (missingFunction) {
+        throw new Error(
+          "Atualize o banco de dados com o arquivo supabase/schema.sql para adicionar dependentes existentes.",
+        );
+      }
+      if (claimError) fail(claimError);
+
+      const row = (Array.isArray(claimed) ? claimed[0] : claimed) as Row | null;
+      if (!row?.id) {
+        throw new Error(
+          "Não encontramos uma conta de dependente disponível com este e-mail. Confira o e-mail ou veja se a conta já não está vinculada a outro responsável.",
+        );
       }
 
       const { data, error } = await client
         .from("dependents")
-        .insert({
-          owner_id: ownerId,
-          name: input.name,
-          avatar: input.avatar,
-          color: input.color,
-          email,
-          age: input.age,
-        })
+        .update(details)
+        .eq("id", text(row.id))
         .select("*")
         .single();
-      if (error) {
-        if (/dependents_email_unique|duplicate key/i.test(error.message)) {
-          throw new Error(
-            "Já existe um perfil com este e-mail. Use outro e-mail ou edite o perfil existente.",
-          );
-        }
-        fail(error);
-      }
+      if (error) fail(error);
       return mapDependent(data as Row);
     },
 

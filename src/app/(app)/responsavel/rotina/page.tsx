@@ -9,10 +9,12 @@ import {
   ChevronRight,
   Clock,
   Info,
+  Plus,
   RotateCcw,
   Sparkles,
 } from "lucide-react";
 import { EmptyState, ErrorNote, LoadingBlock, PageHeader } from "@/components/ui/page-header";
+import { RoutineFormModal } from "@/components/routine-form";
 import { WeeklyBars } from "@/components/weekly-bars";
 import { useApp } from "@/lib/data/provider";
 import {
@@ -38,6 +40,7 @@ export default function ResponsibleRoutinePage() {
   const { backend, activeDependent } = useApp();
   const now = useClientNow();
   const [weekOffset, setWeekOffset] = useState(0);
+  const [formOpen, setFormOpen] = useState(false);
 
   const weekStart = useMemo(
     () => (now ? addDays(startOfWeek(now), weekOffset * 7) : null),
@@ -56,7 +59,7 @@ export default function ResponsibleRoutinePage() {
     return { items, completions };
   }, [backend, activeDependent, weekStart]);
 
-  const { data, loading, error } = useAsync<WeekData>(
+  const { data, loading, error, reload } = useAsync<WeekData>(
     loader,
     [backend, activeDependent?.id, weekKey],
     EMPTY,
@@ -99,27 +102,33 @@ export default function ResponsibleRoutinePage() {
         title={`Rotina de ${activeDependent.name}`}
         description="Veja o que estava planejado, o que foi concluído e o que ficou pendente. O objetivo é acompanhar a autonomia, não medir desempenho."
         actions={
-          <div className="flex items-center gap-1 rounded-full border border-line bg-surface p-1 shadow-card">
-            <button
-              type="button"
-              onClick={() => setWeekOffset((value) => value - 1)}
-              className="flex size-9 items-center justify-center rounded-full text-ink-soft transition hover:bg-surface-2"
-              aria-label="Semana anterior"
-            >
-              <ChevronLeft className="size-4" aria-hidden />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button type="button" onClick={() => setFormOpen(true)} className="btn-primary">
+              <Plus className="size-4" aria-hidden />
+              Nova tarefa
             </button>
-            <span className="min-w-32 px-1 text-center text-xs font-extrabold text-ink">
-              {formatWeekRange(weekStart)}
-            </span>
-            <button
-              type="button"
-              onClick={() => setWeekOffset((value) => Math.min(0, value + 1))}
-              disabled={isCurrentWeek}
-              className="flex size-9 items-center justify-center rounded-full text-ink-soft transition hover:bg-surface-2 disabled:opacity-30"
-              aria-label="Próxima semana"
-            >
-              <ChevronRight className="size-4" aria-hidden />
-            </button>
+            <div className="flex items-center gap-1 rounded-full border border-line bg-surface p-1 shadow-card">
+              <button
+                type="button"
+                onClick={() => setWeekOffset((value) => value - 1)}
+                className="flex size-9 items-center justify-center rounded-full text-ink-soft transition hover:bg-surface-2"
+                aria-label="Semana anterior"
+              >
+                <ChevronLeft className="size-4" aria-hidden />
+              </button>
+              <span className="min-w-32 px-1 text-center text-xs font-extrabold text-ink">
+                {formatWeekRange(weekStart)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setWeekOffset((value) => Math.min(0, value + 1))}
+                disabled={isCurrentWeek}
+                className="flex size-9 items-center justify-center rounded-full text-ink-soft transition hover:bg-surface-2 disabled:opacity-30"
+                aria-label="Próxima semana"
+              >
+                <ChevronRight className="size-4" aria-hidden />
+              </button>
+            </div>
           </div>
         }
       />
@@ -201,12 +210,13 @@ export default function ResponsibleRoutinePage() {
           <EmptyState
             emoji="🧩"
             title="Nenhuma rotina cadastrada"
-            description={`${activeDependent.name} ainda não criou atividades. A rotina é montada na área do dependente, no ritmo dela.`}
+            description={`${activeDependent.name} ainda não tem atividades. Você pode adicionar a primeira agora e ajustar depois junto com ela.`}
             tone="primary"
             action={
-              <Link href="/dependente/rotina" className="btn-primary">
-                Abrir área do dependente
-              </Link>
+              <button type="button" onClick={() => setFormOpen(true)} className="btn-primary">
+                <Plus className="size-4" aria-hidden />
+                Adicionar primeira tarefa
+              </button>
             }
           />
         </div>
@@ -316,13 +326,21 @@ export default function ResponsibleRoutinePage() {
       <div className="flex flex-col items-start justify-between gap-3 rounded-3xl bg-primary-soft/50 px-5 py-4 sm:flex-row sm:items-center">
         <p className="flex items-start gap-2 text-sm leading-relaxed text-primary-strong">
           <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
-          A rotina é criada e ajustada na área do dependente. Aqui, você acompanha o processo — os
-          dias incompletos também contam histórias.
+          Você pode adicionar tarefas por aqui ou deixar que o dependente monte a rotina dele.
+          Os dias incompletos também contam histórias.
         </p>
         <Link href="/responsavel/emocoes" className="btn-secondary shrink-0 text-primary-strong">
           Ver emoções da semana
         </Link>
       </div>
+
+      <RoutineFormModal
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        dependentId={activeDependent.id}
+        item={null}
+        onSaved={reload}
+      />
     </div>
   );
 }

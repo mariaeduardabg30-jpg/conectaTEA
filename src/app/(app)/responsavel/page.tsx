@@ -142,19 +142,19 @@ export default function ResponsibleDashboardPage() {
       <div className="space-y-6">
         <PageHeader
           eyebrow="Área do responsável"
-          title="Vamos criar o primeiro perfil?"
-          description="Cada dependente tem seu próprio espaço de rotina, emoções e sons. Comece adicionando uma pessoa para acompanhar."
+          title="Vamos adicionar o primeiro dependente?"
+          description="Cada dependente tem seu próprio espaço de rotina, emoções e sons. Vincule uma conta que já existe para começar."
         />
         <div className="card p-6 sm:p-10">
           <EmptyState
             emoji="🌱"
             title="Nenhum dependente cadastrado"
-            description="Assim que você criar um perfil, os registros de rotina, emoções e pedidos de ajuda aparecerão aqui."
+            description="Assim que você vincular um dependente, os registros de rotina, emoções e pedidos de ajuda aparecerão aqui."
             tone="primary"
             action={
               <Link href="/responsavel/dependentes" className="btn-primary">
                 <Plus className="size-4" aria-hidden />
-                Criar primeiro perfil
+                Adicionar dependente
               </Link>
             }
           />

@@ -27,6 +27,7 @@ export function DependentFormModal({
   const [age, setAge] = useState(dependent?.age != null ? String(dependent.age) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const creating = !dependent;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -37,6 +38,12 @@ export function DependentFormModal({
     }
 
     const cleanEmail = email.trim();
+    if (creating && !cleanEmail) {
+      setError(
+        "Informe o e-mail da conta do dependente. Só é possível adicionar quem já criou a conta.",
+      );
+      return;
+    }
     if (cleanEmail && !cleanEmail.includes("@")) {
       setError("Informe um e-mail válido.");
       return;
@@ -78,8 +85,12 @@ export function DependentFormModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={dependent ? "Editar perfil" : "Novo dependente"}
-      description="Cada pessoa tem seu próprio espaço, com rotina, emoções e sons."
+      title={dependent ? "Editar perfil" : "Adicionar dependente"}
+      description={
+        dependent
+          ? "Cada pessoa tem seu próprio espaço, com rotina, emoções e sons."
+          : "Adicione uma pessoa que já criou a conta dela como dependente."
+      }
       size="md"
     >
       <form className="space-y-5" onSubmit={submit}>
@@ -151,7 +162,8 @@ export function DependentFormModal({
 
         <div>
           <label htmlFor="dependent-email" className="label">
-            E-mail do dependente <span className="font-normal text-muted">(opcional)</span>
+            E-mail da conta do dependente
+            {!creating && <span className="font-normal text-muted"> (opcional)</span>}
           </label>
           <input
             id="dependent-email"
@@ -162,9 +174,12 @@ export function DependentFormModal({
             placeholder="lia@exemplo.com"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            required={creating}
           />
           <p className="mt-1.5 text-xs leading-relaxed text-muted">
-            Se o dependente criar a conta dele com este e-mail, os dois acessos são vinculados.
+            {creating
+              ? "A pessoa precisa ter criado a conta dela em “Sou dependente → Criar conta”, com este mesmo e-mail."
+              : "Se o dependente criar a conta dele com este e-mail, os dois acessos são vinculados."}
           </p>
         </div>
 
@@ -211,7 +226,7 @@ export function DependentFormModal({
           </button>
           <button type="submit" disabled={saving} className="btn-primary">
             {saving && <InlineSpinner className="size-4" />}
-            {dependent ? "Salvar alterações" : "Criar perfil"}
+            {dependent ? "Salvar alterações" : "Adicionar dependente"}
           </button>
         </div>
       </form>

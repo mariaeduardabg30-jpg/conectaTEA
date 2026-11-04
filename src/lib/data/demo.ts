@@ -683,48 +683,48 @@ export function createDemoBackend(): Backend {
       const db = readDb();
       const accounts = readAccounts();
       const email = input.email?.trim() || null;
-      const linked = email
-        ? accounts.find(
-            (account) =>
-              account.role === "dependente" &&
-              account.email.toLowerCase() === email.toLowerCase(),
-          )
-        : undefined;
+      if (!email) {
+        throw new Error(
+          "Informe o e-mail da conta do dependente. Só é possível adicionar quem já criou a conta.",
+        );
+      }
+      const normalizedEmail = email.toLowerCase();
+      const linked = accounts.find(
+        (account) =>
+          account.role === "dependente" &&
+          account.email.toLowerCase() === normalizedEmail,
+      );
 
-      // Se o dependente já criou a própria conta, aproveitamos o espaço que
-      // ele ganhou em vez de criar um perfil duplicado.
-      const claimable = email
-        ? db.dependents.find(
-            (dependent) =>
-              dependent.ownerId === null &&
-              dependent.email?.toLowerCase() === email.toLowerCase(),
-          )
-        : undefined;
+      // Só é possível adicionar quem já criou a conta de dependente.
+      if (!linked) {
+        throw new Error(
+          "Não encontramos uma conta de dependente com este e-mail. Peça para a pessoa criar a conta em “Sou dependente → Criar conta” e tente novamente.",
+        );
+      }
 
-      if (claimable) {
-        Object.assign(claimable, {
+      const existing = db.dependents.find(
+        (dependent) => dependent.email?.toLowerCase() === normalizedEmail,
+      );
+
+      if (existing && existing.ownerId && existing.ownerId !== session.id) {
+        throw new Error("Este e-mail já está vinculado a outro responsável.");
+      }
+
+      // Se o perfil já existe (do próprio dependente ou desta conta),
+      // aproveitamos o espaço em vez de criar um duplicado.
+      if (existing) {
+        Object.assign(existing, {
           name: input.name,
           avatar: input.avatar,
           color: input.color,
           email,
           age: input.age,
           ownerId: session.id,
-          userId: linked?.id ?? claimable.userId,
-          linkCode: claimable.linkCode ?? generateLinkCode(),
+          userId: linked.id,
+          linkCode: existing.linkCode ?? generateLinkCode(),
         });
         writeDb(db);
-        return publicDependent(claimable);
-      }
-
-      if (
-        email &&
-        db.dependents.some(
-          (dependent) => dependent.email?.toLowerCase() === email.toLowerCase(),
-        )
-      ) {
-        throw new Error(
-          "Já existe um perfil com este e-mail. Use outro e-mail ou edite o perfil existente.",
-        );
+        return publicDependent(existing);
       }
 
       const dependent: DemoDependent = {
@@ -734,7 +734,7 @@ export function createDemoBackend(): Backend {
         color: input.color,
         email,
         age: input.age,
-        userId: linked?.id ?? null,
+        userId: linked.id,
         linkCode: generateLinkCode(new Set(db.dependents.map((item) => item.linkCode ?? ""))),
         ownerId: session.id,
         createdAt: new Date().toISOString(),

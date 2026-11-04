@@ -83,7 +83,7 @@ export default function DependentsPage() {
       <PageHeader
         eyebrow="Dependentes"
         title="Cada pessoa, um espaço próprio"
-        description="Crie e organize os perfis da família. Cada dependente tem sua própria rotina, registros emocionais e histórico de ajuda."
+        description="Adicione quem já criou a conta de dependente. Cada pessoa tem sua própria rotina, registros emocionais e histórico de ajuda."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -96,7 +96,7 @@ export default function DependentsPage() {
             </button>
             <button type="button" onClick={openNew} className="btn-primary">
               <Plus className="size-4" aria-hidden />
-              Novo dependente
+              Adicionar dependente
             </button>
           </div>
         }
@@ -118,17 +118,17 @@ export default function DependentsPage() {
           <EmptyState
             emoji="🌱"
             title="Nenhum perfil por aqui ainda"
-            description="Adicione a primeira pessoa para começar a organizar a rotina, ou vincule um dependente que já criou a própria conta com um código."
+            description="Vincule pelo código mostrado na conta do dependente ou adicione pelo e-mail de uma conta que já existe."
             tone="primary"
             action={
               <div className="flex flex-col items-center justify-center gap-2 sm:flex-row">
-                <button type="button" onClick={openNew} className="btn-primary">
-                  <Plus className="size-4" aria-hidden />
-                  Criar primeiro perfil
-                </button>
-                <button type="button" onClick={() => setLinkOpen(true)} className="btn-secondary">
+                <button type="button" onClick={() => setLinkOpen(true)} className="btn-primary">
                   <Link2 className="size-4" aria-hidden />
                   Vincular com código
+                </button>
+                <button type="button" onClick={openNew} className="btn-secondary">
+                  <Plus className="size-4" aria-hidden />
+                  Adicionar por e-mail
                 </button>
               </div>
             }
@@ -285,7 +285,7 @@ export default function DependentsPage() {
           dependent={editing}
           onSaved={() => {
             void refreshDependents();
-            setNotice(editing ? "Perfil atualizado." : "Perfil criado com sucesso.");
+            setNotice(editing ? "Perfil atualizado." : "Dependente adicionado com sucesso.");
           }}
         />
       )}
