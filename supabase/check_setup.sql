@@ -140,6 +140,7 @@ where n.nspname = 'public'
   and p.proname in (
     'can_access_dependent',
     'is_owner_of_dependent',
+    'claim_dependent_by_email',
     'handle_new_user',
     'link_dependent_account',
     'prevent_profile_role_change',

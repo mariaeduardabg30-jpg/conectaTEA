@@ -1,6 +1,7 @@
 import { getSupabase } from "@/lib/supabase/client";
 import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import type {
+  AppRole,
   AppUser,
   Dependent,
   DependentInput,
@@ -28,22 +29,47 @@ const nullableAge = (value: unknown): number | null => {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : null;
 };
 
-function mapUser(user: {
+type AuthUser = {
   id: string;
   email?: string | null;
   user_metadata?: Record<string, unknown>;
-}): AppUser {
+};
+
+type ProfileRow = {
+  role?: unknown;
+  name?: unknown;
+  age?: unknown;
+} | null;
+
+/**
+ * O perfil salvo no banco é a fonte da verdade para o papel da conta.
+ * O metadata fica como reserva para projetos antigos, em que a linha de
+ * `profiles` ainda não existia.
+ */
+function mapUser(user: AuthUser, profile?: ProfileRow): AppUser {
   const metadataName = user.user_metadata?.name;
   const metadataRole = user.user_metadata?.role;
+  const role: AppRole =
+    profile?.role === "dependente" || profile?.role === "responsavel"
+      ? profile.role
+      : metadataRole === "dependente"
+        ? "dependente"
+        : "responsavel";
+
+  const profileName = typeof profile?.name === "string" ? profile.name.trim() : "";
+  const metadataNameText =
+    typeof metadataName === "string" ? metadataName.trim() : "";
+
   return {
     id: user.id,
     name:
-      typeof metadataName === "string" && metadataName.trim()
-        ? metadataName
-        : (user.email?.split("@")[0] ?? "Responsável"),
+      profileName ||
+      metadataNameText ||
+      user.email?.split("@")[0] ||
+      (role === "dependente" ? "Dependente" : "Responsável"),
     email: user.email ?? "",
-    role: metadataRole === "dependente" ? "dependente" : "responsavel",
-    age: nullableAge(user.user_metadata?.age),
+    role,
+    age: nullableAge(profile?.age ?? user.user_metadata?.age),
   };
 }
 
@@ -129,19 +155,41 @@ export function createSupabaseBackend(): Backend {
     return user.id;
   }
 
+  async function loadUser(user: AuthUser): Promise<AppUser> {
+    const client = getClient();
+    try {
+      const { data } = await client
+        .from("profiles")
+        .select("role, name, age")
+        .eq("id", user.id)
+        .maybeSingle();
+      return mapUser(user, data as ProfileRow);
+    } catch {
+      // Sem acesso à tabela de perfis, o metadata ainda identifica a conta.
+      return mapUser(user);
+    }
+  }
+
   return {
     mode: "supabase",
 
     async getUser() {
       const client = getClient();
       const { data } = await client.auth.getUser();
-      return data.user ? mapUser(data.user) : null;
+      return data.user ? loadUser(data.user) : null;
     },
 
     onAuthChange(callback) {
       const client = getClient();
       const { data } = client.auth.onAuthStateChange((_event, session) => {
-        callback(session?.user ? mapUser(session.user) : null);
+        const current = session?.user;
+        if (!current) {
+          callback(null);
+          return;
+        }
+        void loadUser(current)
+          .then(callback)
+          .catch(() => callback(mapUser(current)));
       });
       return () => data.subscription.unsubscribe();
     },
@@ -151,15 +199,21 @@ export function createSupabaseBackend(): Backend {
       const { data, error } = await client.auth.signInWithPassword({ email, password });
       if (error) fail(error);
       if (!data.user) throw new Error("Não foi possível entrar. Tente novamente.");
-      return mapUser(data.user);
+      return loadUser(data.user);
     },
 
     async signUp(input: SignUpInput): Promise<SignUpResult> {
       const client = getClient();
+      const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
       const { data, error } = await client.auth.signUp({
         email: input.email,
         password: input.password,
         options: {
+          // O e-mail de confirmação volta para a tela de entrada do app.
+          emailRedirectTo:
+            typeof window !== "undefined"
+              ? `${window.location.origin}${basePath}/entrar`
+              : undefined,
           data: {
             name: input.name,
             role: input.role,
@@ -169,7 +223,7 @@ export function createSupabaseBackend(): Backend {
       });
       if (error) fail(error);
       return {
-        user: data.user ? mapUser(data.user) : null,
+        user: data.user ? await loadUser(data.user) : null,
         needsConfirmation: Boolean(data.user && !data.session),
       };
     },
@@ -181,10 +235,12 @@ export function createSupabaseBackend(): Backend {
 
     async requestPasswordReset(email) {
       const client = getClient();
-      // O link do e-mail volta para a tela de definição de nova senha.
+      // O link do e-mail volta para a tela de definição de nova senha. O
+      // basePath é necessário quando o app roda em um subdiretório.
+      const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
       const redirectTo =
         typeof window !== "undefined"
-          ? `${window.location.origin}/redefinir-senha`
+          ? `${window.location.origin}${basePath}/redefinir-senha`
           : undefined;
       const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
       if (error) fail(error);
@@ -209,6 +265,41 @@ export function createSupabaseBackend(): Backend {
     async createDependent(input: DependentInput) {
       const client = getClient();
       const ownerId = await currentUserId();
+      const email = input.email?.trim() || null;
+
+      // O dependente pode ter criado a própria conta antes do responsável.
+      // Nesse caso já existe uma linha sem owner_id e o e-mail é único; em
+      // vez de inserir outra, reivindicamos a linha existente.
+      if (email) {
+        const { data: claimed, error: claimError } = await client.rpc(
+          "claim_dependent_by_email",
+          { target_email: email },
+        );
+        const missingFunction =
+          claimError?.code === "PGRST202" ||
+          /could not find the function|does not exist|schema cache/i.test(
+            claimError?.message ?? "",
+          );
+        if (claimError && !missingFunction) fail(claimError);
+        const row = (Array.isArray(claimed) ? claimed[0] : claimed) as Row | null;
+        if (row?.id) {
+          const { data, error } = await client
+            .from("dependents")
+            .update({
+              name: input.name,
+              avatar: input.avatar,
+              color: input.color,
+              email,
+              age: input.age,
+            })
+            .eq("id", text(row.id))
+            .select("*")
+            .single();
+          if (error) fail(error);
+          return mapDependent(data as Row);
+        }
+      }
+
       const { data, error } = await client
         .from("dependents")
         .insert({
@@ -216,12 +307,19 @@ export function createSupabaseBackend(): Backend {
           name: input.name,
           avatar: input.avatar,
           color: input.color,
-          email: input.email,
+          email,
           age: input.age,
         })
         .select("*")
         .single();
-      if (error) fail(error);
+      if (error) {
+        if (/dependents_email_unique|duplicate key/i.test(error.message)) {
+          throw new Error(
+            "Já existe um perfil com este e-mail. Use outro e-mail ou edite o perfil existente.",
+          );
+        }
+        fail(error);
+      }
       return mapDependent(data as Row);
     },
 
@@ -239,7 +337,12 @@ export function createSupabaseBackend(): Backend {
         .eq("id", id)
         .select("*")
         .single();
-      if (error) fail(error);
+      if (error) {
+        if (/dependents_email_unique|duplicate key/i.test(error.message)) {
+          throw new Error("Já existe outro perfil com este e-mail.");
+        }
+        fail(error);
+      }
       return mapDependent(data as Row);
     },
 

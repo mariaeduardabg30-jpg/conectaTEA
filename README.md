@@ -134,7 +134,7 @@ npm run lint    # análise estática (ESLint)
 
    ```text
    http://localhost:3000/redefinir-senha
-   https://conecatea.com/redefinir-senha
+   https://mariaeduardabg30-jpg.github.io/conectaTEA/redefinir-senha
    ```
 
 6. Reinicie o servidor de desenvolvimento.
@@ -170,16 +170,54 @@ A segurança é garantida por **Row Level Security (RLS)**:
 O vínculo entre o perfil criado pelo responsável e a conta do dependente é feito pelo e-mail:
 ao criar a conta, o gatilho `handle_new_user` procura um `dependents` sem `user_id` com o mesmo
 e-mail e o vincula. Se o perfil for criado depois, o gatilho `link_dependent_account` faz o
-caminho inverso.
+caminho inverso. Quando o dependente cria a conta antes, o responsável pode cadastrar o perfil com
+o mesmo e-mail: a função `claim_dependent_by_email` reivindica o espaço existente (sem duplicar)
+e os dois passam a ver a mesma rotina, emoções e pedidos de ajuda.
 
 O alerta em tempo real usa a publicação `supabase_realtime` na tabela `help_requests`
 (`REPLICA IDENTITY FULL`).
 
 ### Deploy
 
-O app pode ser publicado em qualquer plataforma compatível com Next.js (Vercel, Netlify, etc.).
-Basta configurar as duas variáveis `NEXT_PUBLIC_SUPABASE_*` no ambiente de produção e rodar o
-build.
+O app é 100% cliente (a sessão e os dados ficam no Supabase), então roda tanto em servidor Node
+(Vercel, Netlify etc.) quanto como site estático no GitHub Pages.
+
+#### GitHub Pages
+
+O workflow [`.github/workflows/deploy-pages.yml`](./.github/workflows/deploy-pages.yml) gera a
+exportação estática e publica em:
+
+```text
+https://mariaeduardabg30-jpg.github.io/conectaTEA/
+```
+
+Antes do primeiro deploy, no GitHub:
+
+1. Em **Settings → Pages → Build and deployment → Source**, escolha **GitHub Actions**.
+2. Ainda em **Settings → Pages → Custom domain**, remova `conecatea.com` se ele aparecer ali.
+   O domínio não está registrado e o redirecionamento para ele impede o site de abrir.
+3. Em **Settings → Secrets and variables → Actions → Variables**, crie (opcional, para usar o
+   Supabase em produção):
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+   Sem elas o site publicado abre em modo demonstração.
+4. Rode o workflow **Deploy no GitHub Pages** (Actions → Run workflow) ou faça um push na `main`.
+5. No Supabase, adicione a URL publicada em **Authentication → URL Configuration → Redirect URLs**,
+   incluindo o caminho `/redefinir-senha`.
+
+> **Por que o site não abria:** o arquivo `CNAME` apontava para `conecatea.com`, mas esse domínio
+> não está registrado (o DNS não resolve). O GitHub Pages redirecionava o endereço válido do
+> `github.io` para `http://conecatea.com`, que não existe — por isso o navegador exibia aviso de
+> site inseguro/risco. O `CNAME` foi removido e o site volta a ser publicado no endereço do
+> `github.io`. Se o domínio for registrado depois, configure-o em **Settings → Pages → Custom
+> domain**, crie o `CNAME` novamente e adicione a URL do domínio nas Redirect URLs do Supabase.
+
+#### Outras plataformas
+
+Na Vercel/Netlify, importe o repositório, configure as duas variáveis `NEXT_PUBLIC_SUPABASE_*` e
+use o build padrão (`npm run build`). O build normal continua como servidor Next.js; a exportação
+estática só é ativada quando `GITHUB_PAGES=true`.
 
 ---
 

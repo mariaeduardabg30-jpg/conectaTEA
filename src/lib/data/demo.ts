@@ -601,14 +601,59 @@ export function createDemoBackend(): Backend {
         throw new Error("Apenas o responsável pode criar perfis de dependentes.");
       }
       const db = readDb();
+      const accounts = readAccounts();
+      const email = input.email?.trim() || null;
+      const linked = email
+        ? accounts.find(
+            (account) =>
+              account.role === "dependente" &&
+              account.email.toLowerCase() === email.toLowerCase(),
+          )
+        : undefined;
+
+      // Se o dependente já criou a própria conta, aproveitamos o espaço que
+      // ele ganhou em vez de criar um perfil duplicado.
+      const claimable = email
+        ? db.dependents.find(
+            (dependent) =>
+              dependent.ownerId === null &&
+              dependent.email?.toLowerCase() === email.toLowerCase(),
+          )
+        : undefined;
+
+      if (claimable) {
+        Object.assign(claimable, {
+          name: input.name,
+          avatar: input.avatar,
+          color: input.color,
+          email,
+          age: input.age,
+          ownerId: session.id,
+          userId: linked?.id ?? claimable.userId,
+        });
+        writeDb(db);
+        return publicDependent(claimable);
+      }
+
+      if (
+        email &&
+        db.dependents.some(
+          (dependent) => dependent.email?.toLowerCase() === email.toLowerCase(),
+        )
+      ) {
+        throw new Error(
+          "Já existe um perfil com este e-mail. Use outro e-mail ou edite o perfil existente.",
+        );
+      }
+
       const dependent: DemoDependent = {
         id: uid(),
         name: input.name,
         avatar: input.avatar,
         color: input.color,
-        email: input.email,
+        email,
         age: input.age,
-        userId: null,
+        userId: linked?.id ?? null,
         ownerId: session.id,
         createdAt: new Date().toISOString(),
       };
@@ -622,12 +667,23 @@ export function createDemoBackend(): Backend {
       const db = readDb();
       const index = db.dependents.findIndex((dependent) => dependent.id === id);
       if (index < 0) throw new Error("Dependente não encontrado.");
+      const email = input.email?.trim() || null;
+      if (
+        email &&
+        db.dependents.some(
+          (dependent) =>
+            dependent.id !== id &&
+            dependent.email?.toLowerCase() === email.toLowerCase(),
+        )
+      ) {
+        throw new Error("Já existe outro perfil com este e-mail.");
+      }
       const accounts = readAccounts();
-      const linked = input.email
+      const linked = email
         ? accounts.find(
             (account) =>
               account.role === "dependente" &&
-              account.email.toLowerCase() === input.email?.toLowerCase(),
+              account.email.toLowerCase() === email.toLowerCase(),
           )
         : undefined;
       db.dependents[index] = {
@@ -635,9 +691,9 @@ export function createDemoBackend(): Backend {
         name: input.name,
         avatar: input.avatar,
         color: input.color,
-        email: input.email,
+        email,
         age: input.age,
-        userId: linked?.id ?? db.dependents[index].userId,
+        userId: linked?.id ?? null,
       };
       writeDb(db);
       return publicDependent(db.dependents[index]);

@@ -24,6 +24,7 @@ drop trigger if exists on_auth_user_created on auth.users;
 -- Funções de apoio ------------------------------------------------------------
 drop function if exists public.can_access_dependent(uuid);
 drop function if exists public.is_owner_of_dependent(uuid);
+drop function if exists public.claim_dependent_by_email(text);
 drop function if exists public.handle_new_user();
 drop function if exists public.link_dependent_account();
 drop function if exists public.prevent_profile_role_change();

@@ -53,7 +53,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { ready, user, mode, activeDependent, dependentsLoaded, signOut } = useApp();
-  const requestedRole: "responsavel" | "dependente" = pathname.startsWith("/responsavel")
+  const requestedArea: "responsavel" | "dependente" = pathname.startsWith("/responsavel")
     ? "responsavel"
     : "dependente";
   const { data: helpRequests } = useHelpRequests();
@@ -65,25 +65,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       router.replace("/entrar");
       return;
     }
-    if (user.role !== requestedRole) {
-      router.replace(user.role === "dependente" ? "/dependente" : "/responsavel");
+    // O dependente só usa a própria área. O responsável pode abrir a área
+    // do dependente no mesmo dispositivo (tablet/computador compartilhado).
+    if (user.role === "dependente" && requestedArea === "responsavel") {
+      router.replace("/dependente");
     }
-  }, [ready, user, requestedRole, router]);
+  }, [ready, user, requestedArea, router]);
 
-  if (!ready || !user || user.role !== requestedRole) return <LoadingScreen />;
+  if (
+    !ready ||
+    !user ||
+    (user.role === "dependente" && requestedArea === "responsavel")
+  ) {
+    return <LoadingScreen />;
+  }
 
-  const role = user.role;
-  const nav = role === "responsavel" ? RESPONSIBLE_NAV : DEPENDENT_NAV;
+  const area = requestedArea;
+  const isResponsibleAccount = user.role === "responsavel";
+  const nav = area === "responsavel" ? RESPONSIBLE_NAV : DEPENDENT_NAV;
 
   const isActive = (item: NavItem) =>
     item.exact ? pathname === item.href : pathname.startsWith(item.href);
 
   const current = nav.find(isActive);
-  const areaLabel = role === "responsavel" ? "Área do responsável" : "Área do dependente";
-  const switchArea =
-    role === "responsavel"
+  const areaLabel = area === "responsavel" ? "Área do responsável" : "Área do dependente";
+  const switchArea = isResponsibleAccount
+    ? area === "responsavel"
       ? { href: "/dependente", label: "Abrir área do dependente" }
-      : null;
+      : { href: "/responsavel", label: "Voltar à área do responsável" }
+    : null;
 
   const logout = async () => {
     await signOut();
@@ -101,7 +111,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[272px] flex-col border-r border-line/80 bg-surface/85 backdrop-blur lg:flex">
         <div className="px-6 pb-5 pt-6">
-          <Brand href={role === "responsavel" ? "/responsavel" : "/dependente"} />
+          <Brand href={area === "responsavel" ? "/responsavel" : "/dependente"} />
         </div>
 
         <div className="mx-4 mb-3 rounded-2xl bg-canvas/80 px-3.5 py-2.5">
@@ -109,7 +119,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {areaLabel}
           </p>
           <p className="mt-0.5 truncate text-sm font-bold text-ink">
-            {role === "responsavel" ? (user.name ?? "Responsável") : (activeDependent?.name ?? "Dependente")}
+            {area === "responsavel" ? (user.name ?? "Responsável") : (activeDependent?.name ?? "Dependente")}
           </p>
         </div>
 
@@ -179,7 +189,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="sticky top-0 z-30 border-b border-line/70 bg-canvas/80 backdrop-blur-md">
           <div className="mx-auto flex h-16 max-w-[1240px] items-center justify-between gap-3 px-4 sm:px-6 lg:h-[72px] lg:px-8">
             <div className="flex items-center gap-3 lg:hidden">
-              <Link href={role === "responsavel" ? "/responsavel" : "/dependente"} aria-label="ConectaTEA">
+              <Link href={area === "responsavel" ? "/responsavel" : "/dependente"} aria-label="ConectaTEA">
                 <LogoMark className="size-9" />
               </Link>
               <div className="hidden sm:block">
@@ -187,7 +197,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   {areaLabel}
                 </p>
                 <p className="text-sm font-extrabold text-ink">
-                  {current?.label ?? (role === "responsavel" ? "Visão geral" : "Meu dia")}
+                  {current?.label ?? (area === "responsavel" ? "Visão geral" : "Meu dia")}
                 </p>
               </div>
             </div>
@@ -197,16 +207,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 {areaLabel}
               </p>
               <p className="font-display text-lg font-extrabold text-ink">
-                {current?.label ?? (role === "responsavel" ? "Visão geral" : "Meu dia")}
+                {current?.label ?? (area === "responsavel" ? "Visão geral" : "Meu dia")}
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <DependentSwitcher
-                canManage={role === "responsavel"}
-                manageHref={role === "responsavel" ? "/responsavel/dependentes" : undefined}
+                canManage={isResponsibleAccount}
+                manageHref={isResponsibleAccount ? "/responsavel/dependentes" : undefined}
               />
-              {role === "responsavel" && (
+              {isResponsibleAccount && (
                 <>
                   <AlertSoundToggle />
                   <NotificationBell pending={pending} />
@@ -228,7 +238,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           id="conteudo"
           className="mx-auto w-full max-w-[1240px] px-4 pb-32 pt-6 sm:px-6 sm:pt-8 lg:px-8 lg:pb-16"
         >
-          {role === "dependente" && !activeDependent ? (
+          {area === "dependente" && !activeDependent ? (
             dependentsLoaded ? (
               <div className="card mx-auto max-w-2xl p-6 sm:p-10">
                 <EmptyState
@@ -288,8 +298,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </nav>
 
-      {role === "responsavel" && <AlertListener />}
-      {role === "dependente" && activeDependent && <HelpButton />}
+      {isResponsibleAccount && <AlertListener />}
+      {area === "dependente" && activeDependent && <HelpButton />}
     </div>
   );
 }

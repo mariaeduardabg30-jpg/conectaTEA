@@ -399,6 +399,51 @@ revoke all on function public.is_owner_of_dependent(uuid) from public;
 grant execute on function public.can_access_dependent(uuid) to authenticated;
 grant execute on function public.is_owner_of_dependent(uuid) to authenticated;
 
+-- Vincula ao responsável um perfil que o próprio dependente criou.
+-- A linha começa com owner_id nulo (o dependente se cadastrou sozinho) e só
+-- pode ser reivindicada uma vez, pelo e-mail, por uma conta de responsável.
+create or replace function public.claim_dependent_by_email(target_email text)
+returns public.dependents
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  claimed public.dependents;
+begin
+  if auth.uid() is null then
+    raise exception 'Entre novamente para continuar.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.profiles p
+    where p.id = auth.uid()
+      and p.role = 'responsavel'
+  ) then
+    raise exception 'Apenas o responsável pode vincular um perfil.';
+  end if;
+
+  update public.dependents d
+     set owner_id = auth.uid()
+   where d.id = (
+     select d2.id
+     from public.dependents d2
+     where d2.owner_id is null
+       and d2.email is not null
+       and lower(d2.email) = lower(trim(target_email))
+     order by d2.created_at
+     limit 1
+   )
+   returning * into claimed;
+
+  return claimed;
+end;
+$$;
+
+revoke all on function public.claim_dependent_by_email(text) from public;
+grant execute on function public.claim_dependent_by_email(text) to authenticated;
+
 -- profiles ------------------------------------------------------------------
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own"
