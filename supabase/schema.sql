@@ -816,7 +816,7 @@ begin
     raise exception 'LINK:Código inválido. Confira o código e tente novamente.';
   end if;
 
-  select d into claimed
+  select * into claimed
   from public.dependents d
   where d.link_code = normalized;
 
@@ -863,7 +863,7 @@ begin
     raise exception 'LINK:Entre novamente para continuar.';
   end if;
 
-  select d into target
+  select * into target
   from public.dependents d
   where d.id = target_dependent_id;
 
