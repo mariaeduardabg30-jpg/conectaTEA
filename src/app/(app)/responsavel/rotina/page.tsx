@@ -37,7 +37,7 @@ type WeekData = {
 const EMPTY: WeekData = { items: [], completions: [] };
 
 export default function ResponsibleRoutinePage() {
-  const { backend, activeDependent } = useApp();
+  const { backend, activeDependent, dataSignal } = useApp();
   const now = useClientNow();
   const [weekOffset, setWeekOffset] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
@@ -61,7 +61,7 @@ export default function ResponsibleRoutinePage() {
 
   const { data, loading, error, reload } = useAsync<WeekData>(
     loader,
-    [backend, activeDependent?.id, weekKey],
+    [backend, activeDependent?.id, weekKey, dataSignal],
     EMPTY,
   );
 

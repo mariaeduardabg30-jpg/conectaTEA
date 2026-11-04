@@ -8,6 +8,7 @@ import {
   Bell,
   CalendarCheck2,
   CheckCheck,
+  HeartHandshake,
   LifeBuoy,
   BellRing,
   Check,
@@ -32,6 +33,11 @@ const TYPE_META: Record<
     label: "Pedido de ajuda",
     classes: "bg-help-soft text-help-strong",
   },
+  help_acknowledged: {
+    icon: HeartHandshake,
+    label: "Ajuda a caminho",
+    classes: "bg-primary-soft text-primary-strong",
+  },
   task_created: {
     icon: CalendarCheck2,
     label: "Nova tarefa",
@@ -50,7 +56,9 @@ const TYPE_META: Record<
 };
 
 function targetFor(type: NotificationType): string {
-  return type === "help_request" ? "/responsavel/ajuda" : "/responsavel/rotina";
+  return type === "help_request" || type === "help_acknowledged"
+    ? "/responsavel/ajuda"
+    : "/responsavel/rotina";
 }
 
 export function NotificationBell() {

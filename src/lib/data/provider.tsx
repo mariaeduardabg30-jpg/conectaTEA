@@ -63,6 +63,8 @@ type AppContextValue = {
   helpSignal: number;
   latestHelp: HelpRequest | null;
   dismissHelpAlert: () => void;
+  /** Incrementa quando emoções, rotina ou tarefas mudam em tempo real. */
+  dataSignal: number;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -81,6 +83,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [helpSignal, setHelpSignal] = useState(0);
   const [latestHelp, setLatestHelp] = useState<HelpRequest | null>(null);
+  const [dataSignal, setDataSignal] = useState(0);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const remindersCheckedAtRef = useRef<number>(0);
 
@@ -231,6 +234,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, [backend, user]);
 
+  useEffect(() => {
+    if (!user) return;
+    return backend.subscribeDataChanges((change) => {
+      // Perfis alterados também mudam os nomes exibidos na interface.
+      if (change.table === "dependents") {
+        void loadDependents();
+        return;
+      }
+      setDataSignal((value) => value + 1);
+    });
+  }, [backend, user, loadDependents]);
+
   const setActiveDependentId = useCallback((id: string) => {
     setActiveId(id);
     if (typeof window !== "undefined") {
@@ -324,6 +339,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       helpSignal,
       latestHelp,
       dismissHelpAlert,
+      dataSignal,
     }),
     [
       ready,
@@ -345,6 +361,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       helpSignal,
       latestHelp,
       dismissHelpAlert,
+      dataSignal,
     ],
   );
 

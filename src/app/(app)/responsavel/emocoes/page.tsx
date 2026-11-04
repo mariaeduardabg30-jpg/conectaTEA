@@ -31,7 +31,7 @@ import { useClientNow } from "@/lib/hooks/use-client-now";
 import type { EmotionLog } from "@/lib/types";
 
 export default function ResponsibleEmotionsPage() {
-  const { backend, activeDependent } = useApp();
+  const { backend, activeDependent, dataSignal } = useApp();
   const now = useClientNow();
   const [weekOffset, setWeekOffset] = useState(0);
 
@@ -55,7 +55,7 @@ export default function ResponsibleEmotionsPage() {
 
   const { data: logs, loading, error } = useAsync<EmotionLog[]>(
     loader,
-    [backend, activeDependent?.id, weekKey],
+    [backend, activeDependent?.id, weekKey, dataSignal],
     [],
   );
 

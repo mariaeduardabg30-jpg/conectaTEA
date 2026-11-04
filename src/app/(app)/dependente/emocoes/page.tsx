@@ -28,7 +28,7 @@ type EmotionCheckInProps = {
 };
 
 export default function DependentEmotionsPage() {
-  const { backend, activeDependent } = useApp();
+  const { backend, activeDependent, dataSignal } = useApp();
   const now = useClientNow();
 
   const loader = useCallback(
@@ -40,7 +40,7 @@ export default function DependentEmotionsPage() {
   );
   const { data: logs, loading, error: loadError, reload, setData } = useAsync<EmotionLog[]>(
     loader,
-    [backend, activeDependent?.id],
+    [backend, activeDependent?.id, dataSignal],
     [],
   );
 

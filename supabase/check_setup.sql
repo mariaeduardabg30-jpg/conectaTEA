@@ -174,6 +174,7 @@ where n.nspname = 'public'
     'routine_items_notify',
     'task_completions_notify',
     'help_requests_notify',
+    'help_requests_notify_acknowledged',
     'run_task_reminders',
     'dependents_set_link_code'
   )
@@ -193,7 +194,8 @@ where trigger_name in (
   'dependents_set_link_code',
   'routine_items_notify_responsible',
   'task_completions_notify_responsible',
-  'help_requests_notify_responsible'
+  'help_requests_notify_responsible',
+  'help_requests_notify_acknowledged'
 )
 order by event_object_table, trigger_name;
 
@@ -235,8 +237,30 @@ select
       and schemaname = 'public'
       and tablename = t.tablename
   ) then 'ok' else 'FALTANDO' end as status
-from (values ('help_requests'), ('notifications')) as t(tablename)
+from (values
+  ('help_requests'),
+  ('notifications'),
+  ('emotion_logs'),
+  ('routine_items'),
+  ('task_completions'),
+  ('dependents')
+) as t(tablename)
 order by tablename;
+
+-- 9b) O tipo "ajuda a caminho" precisa ser aceito pela notificação.
+select
+  '9. tipo de notificacao' as verificacao,
+  'notifications.type' as objeto,
+  case
+    when exists (
+      select 1
+      from pg_constraint
+      where conrelid = 'public.notifications'::regclass
+        and conname = 'notifications_type_check'
+        and pg_get_constraintdef(oid) like '%help_acknowledged%'
+    ) then 'ok'
+    else 'FALTANDO'
+  end as status;
 
 -- 10) Privilégios das roles do Supabase --------------------------------------
 select

@@ -4,6 +4,8 @@ import type {
   AppRole,
   AppUser,
   AppNotification,
+  DataChange,
+  DataTable,
   Dependent,
   DependentInput,
   EmotionLog,
@@ -130,7 +132,7 @@ function mapEmotion(row: Row): EmotionLog {
 function mapNotification(row: Row): AppNotification {
   const rawType = text(row.type, "task_created");
   const type: NotificationType = (
-    ["help_request", "task_created", "task_reminder", "task_completed"] as const
+    ["help_request", "help_acknowledged", "task_created", "task_reminder", "task_completed"] as const
   ).includes(rawType as NotificationType)
     ? (rawType as NotificationType)
     : "task_created";
@@ -166,6 +168,19 @@ function mapHelpRequest(row: Row): HelpRequest {
     createdAt: text(row.created_at, new Date().toISOString()),
     acknowledgedAt: nullableText(row.acknowledged_at),
     acknowledgedBy: nullableText(row.acknowledged_by),
+  };
+}
+
+function mapDataChange(
+  table: DataTable,
+  type: DataChange["type"],
+  row: Row,
+): DataChange {
+  return {
+    table,
+    type,
+    dependentId:
+      table === "dependents" ? nullableText(row.id) : nullableText(row.dependent_id),
   };
 }
 
@@ -648,6 +663,39 @@ export function createSupabaseBackend(): Backend {
       return () => {
         cancelled = true;
         if (channel) void client.removeChannel(channel);
+      };
+    },
+
+    subscribeDataChanges(callback) {
+      const client = getClient();
+      const tables: DataTable[] = [
+        "emotion_logs",
+        "routine_items",
+        "task_completions",
+        "dependents",
+      ];
+      const channel = client.channel(
+        `data-changes-${Math.random().toString(36).slice(2)}`,
+      );
+      tables.forEach((table) => {
+        channel.on(
+          "postgres_changes",
+          { event: "*", schema: "public", table },
+          (payload) => {
+            const row = (payload.new ?? payload.old ?? {}) as Row;
+            callback(
+              mapDataChange(
+                table,
+                payload.eventType as DataChange["type"],
+                row,
+              ),
+            );
+          },
+        );
+      });
+      channel.subscribe();
+      return () => {
+        void client.removeChannel(channel);
       };
     },
   };

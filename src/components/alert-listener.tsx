@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { BellRing, LifeBuoy, Volume2, X } from "lucide-react";
+import { BellRing, HeartHandshake, LifeBuoy, Volume2, X } from "lucide-react";
+import { InlineSpinner } from "@/components/ui/page-header";
 import { useApp } from "@/lib/data/provider";
-import { playHelpAlert } from "@/lib/audio/alerts";
+import { playHelpAlert, unlockAudio } from "@/lib/audio/alerts";
 import { setAlertSoundEnabled, useAlertSound } from "@/lib/audio/preferences";
 import { formatRelative } from "@/lib/date";
 import { readableTextColor } from "@/lib/theme";
@@ -50,13 +51,35 @@ function VolumeXIcon() {
 }
 
 export function AlertListener() {
-  const { latestHelp, dependents, dismissHelpAlert } = useApp();
+  const { latestHelp, dependents, dismissHelpAlert, backend, user } = useApp();
   const soundEnabled = useAlertSound();
   const soundEnabledRef = useRef(soundEnabled);
+  const [helping, setHelping] = useState(false);
+  const [helpError, setHelpError] = useState<{ id: string; message: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     soundEnabledRef.current = soundEnabled;
   }, [soundEnabled]);
+
+  // Os navegadores só liberam áudio depois de um gesto do usuário. Como a
+  // preferência já vem ativada, desbloqueamos o áudio no primeiro toque/tecla
+  // para que o alerta de ajuda toque de verdade quando o pedido chegar.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const unlock = () => {
+      if (soundEnabledRef.current) void unlockAudio();
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    window.addEventListener("touchstart", unlock, { passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
+    };
+  }, []);
 
   useEffect(() => {
     if (!latestHelp) return;
@@ -64,6 +87,27 @@ export function AlertListener() {
     const timer = window.setTimeout(() => dismissHelpAlert(), 30000);
     return () => window.clearTimeout(timer);
   }, [latestHelp, dismissHelpAlert]);
+
+  const offerHelp = async () => {
+    if (!latestHelp || helping) return;
+    const requestId = latestHelp.id;
+    setHelping(true);
+    setHelpError(null);
+    try {
+      await backend.acknowledgeHelpRequest(requestId, user?.name ?? "Responsável");
+      dismissHelpAlert();
+    } catch (cause) {
+      setHelpError({
+        id: requestId,
+        message:
+          cause instanceof Error
+            ? cause.message
+            : "Não foi possível avisar. Tente novamente.",
+      });
+    } finally {
+      setHelping(false);
+    }
+  };
 
   if (!latestHelp) return null;
 
@@ -111,26 +155,35 @@ export function AlertListener() {
                 Ativar alerta sonoro
               </button>
             )}
+            {helpError?.id === latestHelp.id && (
+              <p className="mt-2 text-xs font-bold text-help-strong">
+                {helpError.message}
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void offerHelp()}
+                disabled={helping}
+                className="btn-primary min-h-9 px-3.5 py-1.5 text-xs"
+              >
+                {helping ? (
+                  <InlineSpinner className="size-3.5" />
+                ) : (
+                  <HeartHandshake className="size-3.5" aria-hidden />
+                )}
+                Quero ajudar
+              </button>
               <Link
                 href="/responsavel/ajuda"
                 onClick={() => {
                   dismissHelpAlert();
                 }}
-                className="btn-primary min-h-9 px-3.5 py-1.5 text-xs"
+                className="btn-secondary min-h-9 px-3.5 py-1.5 text-xs"
               >
                 <LifeBuoy className="size-3.5" aria-hidden />
                 Ver pedido
               </Link>
-              <button
-                type="button"
-                onClick={() => {
-                  dismissHelpAlert();
-                }}
-                className="btn-secondary min-h-9 px-3.5 py-1.5 text-xs"
-              >
-                Depois
-              </button>
             </div>
           </div>
           <button

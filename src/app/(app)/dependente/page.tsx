@@ -39,7 +39,7 @@ type TodayData = {
 const EMPTY: TodayData = { items: [], completions: [], emotions: [] };
 
 export default function DependentTodayPage() {
-  const { backend, activeDependent } = useApp();
+  const { backend, activeDependent, dataSignal } = useApp();
   const now = useClientNow();
   const [savingId, setSavingId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -61,7 +61,7 @@ export default function DependentTodayPage() {
 
   const { data, loading, error, setData } = useAsync<TodayData>(
     loader,
-    [backend, activeDependent?.id],
+    [backend, activeDependent?.id, dataSignal],
     EMPTY,
   );
 

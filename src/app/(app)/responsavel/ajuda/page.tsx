@@ -6,8 +6,8 @@ import {
   BellRing,
   CheckCheck,
   Clock,
+  HeartHandshake,
   Info,
-  LifeBuoy,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -58,11 +58,15 @@ export default function ResponsibleHelpPage() {
     setError(null);
     try {
       await backend.acknowledgeHelpRequest(id, user?.name ?? "Responsável");
-      setNotice("Pedido reconhecido. O dependente já pode ser acolhido.");
+      const request = allRequests.find((item) => item.id === id);
+      const dependent = request ? dependentById.get(request.dependentId) : null;
+      setNotice(
+        `Avisamos ${dependent?.name ?? "o dependente"} que a ajuda está a caminho.`,
+      );
       reload();
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "Não foi possível reconhecer o pedido.",
+        cause instanceof Error ? cause.message : "Não foi possível avisar o dependente.",
       );
     } finally {
       setAcking(null);
@@ -74,7 +78,7 @@ export default function ResponsibleHelpPage() {
       <PageHeader
         eyebrow="Pedidos de ajuda"
         title="Quando alguém precisa, você fica sabendo"
-        description="Cada acionamento é registrado com quem pediu e o horário. Reconheça o pedido depois de oferecer o acolhimento."
+        description="Cada acionamento é registrado com quem pediu e o horário. Ao tocar em “Quero ajudar”, o dependente recebe um aviso de que a ajuda está a caminho."
         actions={
           <Link href="/responsavel" className="btn-secondary">
             Voltar para a visão geral
@@ -172,8 +176,8 @@ export default function ResponsibleHelpPage() {
                   </h2>
                   <p className="text-xs font-bold text-muted">
                     {pending.length > 0
-                      ? "Reconheça depois de ir até o dependente."
-                      : "Tudo foi reconhecido. Respire com tranquilidade."}
+                      ? "Toque em “Quero ajudar” para avisar que você está indo."
+                      : "Tudo foi respondido. Respire com tranquilidade."}
                   </p>
                 </div>
               </div>
@@ -194,7 +198,7 @@ export default function ResponsibleHelpPage() {
                 <div className="flex items-center gap-3 rounded-2xl bg-surface px-4 py-4">
                   <CheckCheck className="size-6 shrink-0 text-primary" aria-hidden />
                   <p className="text-sm leading-relaxed text-ink-soft">
-                    Nenhum pedido aguardando reconhecimento
+                    Nenhum pedido aguardando resposta
                     {activeFilter === "all" ? " nesta família" : " para este dependente"}. Novos pedidos
                     aparecem aqui em tempo real.
                   </p>
@@ -246,8 +250,8 @@ export default function ResponsibleHelpPage() {
 
                       <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2">
                         <p className="text-[0.68rem] font-bold text-muted">
-                          Vá até {dependent?.name ?? "o dependente"} e ofereça apoio antes de
-                          reconhecer.
+                          Toque em “Quero ajudar” para avisar {dependent?.name ?? "o dependente"} de
+                          que a ajuda está a caminho.
                         </p>
                         <button
                           type="button"
@@ -258,9 +262,9 @@ export default function ResponsibleHelpPage() {
                           {acking === request.id ? (
                             <InlineSpinner className="size-3.5" />
                           ) : (
-                            <LifeBuoy className="size-3.5" aria-hidden />
+                            <HeartHandshake className="size-3.5" aria-hidden />
                           )}
-                          Reconhecer pedido
+                          Quero ajudar
                         </button>
                       </div>
                     </article>
@@ -275,7 +279,7 @@ export default function ResponsibleHelpPage() {
               <div>
                 <p className="eyebrow">Histórico</p>
                 <h2 id="historico-ajuda" className="mt-1 font-display text-xl font-black text-ink">
-                  Pedidos reconhecidos
+                  Pedidos com ajuda a caminho
                 </h2>
               </div>
               <span className="chip">{history.length} registros</span>
@@ -287,7 +291,7 @@ export default function ResponsibleHelpPage() {
               </div>
             ) : history.length === 0 ? (
               <div className="px-5 py-8 text-center text-sm text-muted">
-                Os pedidos reconhecidos aparecerão aqui com data, horário e quem confirmou.
+                Os pedidos respondidos aparecerão aqui com data, horário e quem avisou.
               </div>
             ) : (
               <ul className="divide-y divide-line/70">
@@ -312,7 +316,7 @@ export default function ResponsibleHelpPage() {
                         <p className="text-[0.68rem] font-bold text-muted">
                           Pedido em {formatDateTime(request.createdAt)}
                           {request.acknowledgedAt
-                            ? ` · reconhecido em ${formatDateTime(request.acknowledgedAt)}`
+                            ? ` · ajuda a caminho em ${formatDateTime(request.acknowledgedAt)}`
                             : ""}
                         </p>
                         {request.acknowledgedBy && (
@@ -327,7 +331,7 @@ export default function ResponsibleHelpPage() {
                         )}
                       </div>
                       <span className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-[0.6rem] font-extrabold text-primary-strong">
-                        Reconhecido
+                        Ajuda a caminho
                       </span>
                     </li>
                   );
@@ -402,7 +406,8 @@ export default function ResponsibleHelpPage() {
                 <strong>2.</strong> Reduza estímulos: som, luz forte, muita gente ao redor.
               </li>
               <li>
-                <strong>3.</strong> Só depois de acolher, toque em “Reconhecer pedido”.
+                <strong>3.</strong> Toque em “Quero ajudar” para que o dependente saiba que você
+                está a caminho.
               </li>
             </ol>
           </section>

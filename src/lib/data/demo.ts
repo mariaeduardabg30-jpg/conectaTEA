@@ -5,6 +5,7 @@ import type {
   AppNotification,
   AppRole,
   AppUser,
+  DataChange,
   Dependent,
   DependentInput,
   EmotionInput,
@@ -21,6 +22,7 @@ const SESSION_KEY = "conectatea.demo.session.v2";
 const ACCOUNTS_KEY = "conectatea.demo.accounts.v1";
 const HELP_CHANNEL = "conectatea.help";
 const NOTIFICATION_CHANNEL = "conectatea.notifications";
+const DATA_CHANNEL = "conectatea.data";
 
 /** O dono do perfil fica só no demo; o app não precisa dele na interface. */
 type DemoDependent = Dependent & { ownerId: string | null };
@@ -520,6 +522,16 @@ export function createDemoBackend(): Backend {
     }
   };
 
+  const broadcastData = (change: DataChange) => {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent<DataChange>("conectatea:data", { detail: change }));
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel(DATA_CHANNEL);
+      channel.postMessage(change);
+      channel.close();
+    }
+  };
+
   /**
    * Cria uma notificação para o(s) responsável(is) vinculado(s) a um dependente.
    * O ator é ignorado: quem fez a ação não é avisado sobre ela mesmo.
@@ -724,6 +736,7 @@ export function createDemoBackend(): Backend {
           linkCode: existing.linkCode ?? generateLinkCode(),
         });
         writeDb(db);
+        broadcastData({ table: "dependents", type: "UPDATE", dependentId: existing.id });
         return publicDependent(existing);
       }
 
@@ -741,6 +754,7 @@ export function createDemoBackend(): Backend {
       };
       db.dependents.push(dependent);
       writeDb(db);
+      broadcastData({ table: "dependents", type: "INSERT", dependentId: dependent.id });
       return publicDependent(dependent);
     },
 
@@ -778,6 +792,7 @@ export function createDemoBackend(): Backend {
         userId: linked?.id ?? null,
       };
       writeDb(db);
+      broadcastData({ table: "dependents", type: "UPDATE", dependentId: id });
       return publicDependent(db.dependents[index]);
     },
 
@@ -790,6 +805,7 @@ export function createDemoBackend(): Backend {
       db.emotions = db.emotions.filter((item) => item.dependentId !== id);
       db.helpRequests = db.helpRequests.filter((item) => item.dependentId !== id);
       writeDb(db);
+      broadcastData({ table: "dependents", type: "DELETE", dependentId: id });
     },
 
     async listRoutineItems(dependentId) {
@@ -815,6 +831,7 @@ export function createDemoBackend(): Backend {
       };
       db.routineItems.push(item);
       writeDb(db);
+      broadcastData({ table: "routine_items", type: "INSERT", dependentId });
       const session = readSession();
       notifyResponsibles({
         actorId: session?.id ?? null,
@@ -841,15 +858,28 @@ export function createDemoBackend(): Backend {
         durationMin: input.durationMin,
       };
       writeDb(db);
+      broadcastData({
+        table: "routine_items",
+        type: "UPDATE",
+        dependentId: db.routineItems[index].dependentId,
+      });
       return db.routineItems[index];
     },
 
     async deleteRoutineItem(id) {
       await delay(100);
       const db = readDb();
+      const target = db.routineItems.find((item) => item.id === id);
       db.routineItems = db.routineItems.filter((item) => item.id !== id);
       db.completions = db.completions.filter((item) => item.routineItemId !== id);
       writeDb(db);
+      if (target) {
+        broadcastData({
+          table: "routine_items",
+          type: "DELETE",
+          dependentId: target.dependentId,
+        });
+      }
     },
 
     async listCompletions(dependentId, from, to) {
@@ -878,6 +908,11 @@ export function createDemoBackend(): Backend {
           completedAt: new Date().toISOString(),
         });
         writeDb(db);
+        broadcastData({
+          table: "task_completions",
+          type: "INSERT",
+          dependentId,
+        });
         const session = readSession();
         const item = db.routineItems.find((entry) => entry.id === routineItemId);
         notifyResponsibles({
@@ -892,6 +927,11 @@ export function createDemoBackend(): Backend {
         return;
       }
       writeDb(db);
+      broadcastData({
+        table: "task_completions",
+        type: "DELETE",
+        dependentId,
+      });
     },
 
     async listEmotions(dependentId, fromIso) {
@@ -916,6 +956,7 @@ export function createDemoBackend(): Backend {
       };
       db.emotions.unshift(emotion);
       writeDb(db);
+      broadcastData({ table: "emotion_logs", type: "INSERT", dependentId });
       return emotion;
     },
 
@@ -964,6 +1005,28 @@ export function createDemoBackend(): Backend {
       writeDb(db);
       // Mantém outras abas e o alerta global em sincronia.
       broadcastHelp(request);
+
+      // Avisa a conta do dependente que a ajuda está a caminho (equivalente
+      // ao gatilho do banco em produção).
+      const dependent = db.dependents.find((item) => item.id === request.dependentId);
+      if (dependent?.userId) {
+        const notification: AppNotification = {
+          id: uid(),
+          recipientId: dependent.userId,
+          dependentId: dependent.id,
+          type: "help_acknowledged",
+          title: "Ajuda a caminho",
+          body: `${byName} viu seu pedido e a ajuda está a caminho.`,
+          routineItemId: null,
+          scheduledDate: null,
+          readAt: null,
+          createdAt: new Date().toISOString(),
+        };
+        db.notifications.unshift(notification);
+        writeDb(db);
+        broadcastNotification(notification);
+      }
+
       return request;
     },
 
@@ -1091,6 +1154,22 @@ export function createDemoBackend(): Backend {
       }
       return () => {
         window.removeEventListener("conectatea:notification", localHandler);
+        channel?.close();
+      };
+    },
+
+    subscribeDataChanges(callback) {
+      if (typeof window === "undefined") return () => undefined;
+      const localHandler = (event: Event) => {
+        callback((event as CustomEvent<DataChange>).detail);
+      };
+      window.addEventListener("conectatea:data", localHandler);
+      const channel = "BroadcastChannel" in window ? new BroadcastChannel(DATA_CHANNEL) : null;
+      if (channel) {
+        channel.onmessage = (event: MessageEvent<DataChange>) => callback(event.data);
+      }
+      return () => {
+        window.removeEventListener("conectatea:data", localHandler);
         channel?.close();
       };
     },

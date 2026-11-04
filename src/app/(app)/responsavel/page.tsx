@@ -46,7 +46,7 @@ type FamilyData = Record<string, DependentData>;
 const EMPTY_DEPENDENT_DATA: DependentData = { items: [], completions: [], emotions: [] };
 
 export default function ResponsibleDashboardPage() {
-  const { backend, dependents, dependentsLoaded, activeDependent, setActiveDependentId } =
+  const { backend, dependents, dependentsLoaded, activeDependent, setActiveDependentId, dataSignal } =
     useApp();
   const now = useClientNow();
   const todayKey = now ? toDateKey(now) : "";
@@ -76,7 +76,7 @@ export default function ResponsibleDashboardPage() {
 
   const { data: familyData, loading, error } = useAsync<FamilyData>(
     loader,
-    [backend, dependentIds, todayKey],
+    [backend, dependentIds, todayKey, dataSignal],
     {},
   );
 
@@ -196,7 +196,7 @@ export default function ResponsibleDashboardPage() {
               href="/responsavel/ajuda"
               className="btn min-h-9 bg-white px-3.5 py-1.5 text-xs text-help-strong hover:bg-white/90"
             >
-              Ver e reconhecer
+              Ver e ajudar
               <ArrowRight className="size-3.5" aria-hidden />
             </Link>
           </div>
@@ -541,10 +541,10 @@ export default function ResponsibleDashboardPage() {
                     : `${activePending} pedidos de ajuda recentes`}
                 </h2>
                 <p className="mt-1 text-xs leading-relaxed text-help-strong/80">
-                  {activeDependent.name} pediu assistência e ainda não recebeu confirmação.
+                  {activeDependent.name} pediu assistência e ainda não recebeu o aviso de que a ajuda está a caminho.
                 </p>
                 <Link href="/responsavel/ajuda" className="btn bg-help text-white mt-3 min-h-9 w-full text-xs hover:bg-help-strong">
-                  Ver e reconhecer
+                  Quero ajudar
                 </Link>
               </section>
             )}

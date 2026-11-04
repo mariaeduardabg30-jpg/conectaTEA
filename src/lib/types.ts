@@ -91,9 +91,10 @@ export type EmotionInput = {
   note: string;
 };
 
-/** Tipos de notificação que o app entrega para o responsável. */
+/** Tipos de notificação entregues pelo app. */
 export type NotificationType =
   | "help_request"
+  | "help_acknowledged"
   | "task_created"
   | "task_reminder"
   | "task_completed";
@@ -118,3 +119,19 @@ export type HelpSubscription = (request: HelpRequest) => void;
 
 /** Assinatura de novas notificações. */
 export type NotificationSubscription = (notification: AppNotification) => void;
+
+/** Tabelas observadas em tempo real para atualizar as telas sem recarregar. */
+export type DataTable =
+  | "emotion_logs"
+  | "routine_items"
+  | "task_completions"
+  | "dependents";
+
+export type DataChange = {
+  table: DataTable;
+  type: "INSERT" | "UPDATE" | "DELETE";
+  /** Dependente relacionado ao registro (quando existir). */
+  dependentId: string | null;
+};
+
+export type DataSubscription = (change: DataChange) => void;

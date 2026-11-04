@@ -2,6 +2,7 @@ import type {
   AppNotification,
   AppRole,
   AppUser,
+  DataSubscription,
   Dependent,
   DependentInput,
   EmotionInput,
@@ -82,6 +83,12 @@ export interface Backend {
   markNotificationRead(id: string): Promise<void>;
   markAllNotificationsRead(): Promise<void>;
   subscribeNotifications(callback: NotificationSubscription): () => void;
+
+  /**
+   * Avisa quando emoções, rotina, tarefas ou perfis mudam. As telas usam esse
+   * sinal para recarregar os dados sem exigir atualização manual da página.
+   */
+  subscribeDataChanges(callback: DataSubscription): () => void;
   /**
    * Opcional — apenas o modo demonstração implementa. Em produção o lembrete
    * da tarefa é criado pelo banco de dados (função agendada), com o app fechado.

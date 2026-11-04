@@ -900,7 +900,7 @@ create table if not exists public.notifications (
   id uuid primary key default gen_random_uuid(),
   recipient_id uuid not null references auth.users (id) on delete cascade,
   dependent_id uuid not null references public.dependents (id) on delete cascade,
-  type text not null check (type in ('help_request', 'task_created', 'task_reminder', 'task_completed')),
+  type text not null check (type in ('help_request', 'help_acknowledged', 'task_created', 'task_reminder', 'task_completed')),
   title text not null check (char_length(trim(title)) between 1 and 140),
   body text not null default '' check (char_length(body) <= 300),
   routine_item_id uuid references public.routine_items (id) on delete cascade,
@@ -911,6 +911,13 @@ create table if not exists public.notifications (
 
 create index if not exists notifications_recipient_created_idx
   on public.notifications (recipient_id, created_at desc);
+
+-- Bancos criados antes da mensagem "ajuda a caminho" precisam aceitar o novo
+-- tipo de notificação. Este bloco é idempotente e seguro para rodar de novo.
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications
+  add constraint notifications_type_check
+  check (type in ('help_request', 'help_acknowledged', 'task_created', 'task_reminder', 'task_completed'));
 
 -- Deduplicação: no máximo uma notificação por tarefa/evento/dia/destinatário.
 create unique index if not exists notifications_dedupe_unique
@@ -1094,6 +1101,62 @@ create trigger help_requests_notify_responsible
   after insert on public.help_requests
   for each row execute function public.help_requests_notify();
 
+-- Responsável tocou em "Quero ajudar": avisa a conta do dependente que a
+-- ajuda está a caminho. Só dispara na primeira confirmação de cada pedido.
+create or replace function public.help_requests_notify_acknowledged()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  recipient uuid;
+  responsible_name text;
+begin
+  if old.acknowledged_at is not null or new.acknowledged_at is null then
+    return new;
+  end if;
+
+  select d.user_id
+  into recipient
+  from public.dependents d
+  where d.id = new.dependent_id;
+
+  if recipient is null then
+    return new;
+  end if;
+
+  responsible_name := coalesce(
+    nullif(trim(new.acknowledged_by), ''),
+    'Seu responsável'
+  );
+
+  insert into public.notifications (
+    recipient_id,
+    dependent_id,
+    type,
+    title,
+    body
+  ) values (
+    recipient,
+    new.dependent_id,
+    'help_acknowledged',
+    'Ajuda a caminho',
+    left(
+      format('%s viu seu pedido e a ajuda está a caminho.', responsible_name),
+      300
+    )
+  );
+
+  return new;
+end;
+$$;
+
+drop trigger if exists help_requests_notify_acknowledged on public.help_requests;
+create trigger help_requests_notify_acknowledged
+  after update on public.help_requests
+  for each row execute function public.help_requests_notify_acknowledged();
+
 -- Lembrete no horário programado: executado pelo pg_cron a cada minuto.
 create or replace function public.run_task_reminders()
 returns integer
@@ -1241,5 +1304,35 @@ begin
   else
     create publication supabase_realtime for table public.help_requests, public.notifications;
   end if;
+end
+$$;
+
+-- Realtime das telas: emoções, rotina, tarefas concluídas e perfis também
+-- chegam sem recarregar a página.
+do $$
+declare
+  target text;
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    create publication supabase_realtime;
+  end if;
+
+  foreach target in array array[
+    'emotion_logs',
+    'routine_items',
+    'task_completions',
+    'dependents'
+  ]
+  loop
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = target
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', target);
+    end if;
+  end loop;
 end
 $$;
