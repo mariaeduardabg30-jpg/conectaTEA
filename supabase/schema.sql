@@ -1,7 +1,15 @@
 -- ============================================================================
--- ConectaTEA · schema do Supabase (v2 · contas de responsável e dependente)
+-- ConectaTEA · schema do Supabase (v3 · contas, vinculação por código,
+-- notificações e push)
 -- Execute este arquivo no SQL Editor do seu projeto Supabase.
 -- O script é idempotente: pode ser executado mais de uma vez com segurança.
+--
+-- v3 adiciona:
+--   · dependents.link_code — código único de vinculação por dependente
+--   · link_dependent_by_code / regenerate_link_code — vínculo pelo app
+--   · notifications — notificações para o responsável (criadas pelo banco)
+--   · run_task_reminders + pg_cron — lembrete no horário programado
+--   · push_subscriptions — inscrições Web Push por dispositivo
 -- ============================================================================
 
 create extension if not exists "pgcrypto";
@@ -697,3 +705,541 @@ where u.raw_user_meta_data ->> 'role' = 'dependente'
     from public.dependents d
     where d.email is not null and lower(d.email) = lower(u.email)
   );
+
+-- ============================================================================
+-- CÓDIGO ÚNICO DE VINCULAÇÃO (v3)
+-- Cada dependente tem um código (8 caracteres, alfabeto sem letras/números
+-- confusos) que o responsável digita no app para vincular a conta.
+-- ============================================================================
+create or replace function public.generate_link_code()
+returns text
+language plpgsql
+volatile
+set search_path = public
+as $$
+declare
+  alphabet constant text := 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  candidate text := '';
+  index integer;
+begin
+  for index in 1..8 loop
+    candidate := candidate || substr(alphabet, floor(random() * length(alphabet))::integer + 1, 1);
+  end loop;
+  return candidate;
+end;
+$$;
+
+alter table public.dependents add column if not exists link_code text;
+
+-- Preenche os códigos dos perfis que ainda não têm um, um a um, garantindo
+-- unicidade mesmo dentro da mesma execução.
+do $$
+declare
+  rec record;
+  candidate text;
+begin
+  for rec in select id from public.dependents where link_code is null loop
+    loop
+      candidate := public.generate_link_code();
+      begin
+        update public.dependents set link_code = candidate where id = rec.id;
+        exit;
+      exception
+        when unique_violation then
+          -- Código repetido: gera outro e tenta de novo.
+      end;
+    end loop;
+  end loop;
+end
+$$;
+
+create unique index if not exists dependents_link_code_unique
+  on public.dependents (link_code);
+
+-- Todo perfil novo recebe um código automaticamente.
+create or replace function public.dependents_set_link_code()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  candidate text;
+begin
+  if new.link_code is not null then
+    return new;
+  end if;
+  loop
+    candidate := public.generate_link_code();
+    if not exists (
+      select 1 from public.dependents d where d.link_code = candidate
+    ) then
+      new.link_code := candidate;
+      return new;
+    end if;
+  end loop;
+end;
+$$;
+
+drop trigger if exists dependents_set_link_code on public.dependents;
+create trigger dependents_set_link_code
+  before insert on public.dependents
+  for each row execute function public.dependents_set_link_code();
+
+-- Vincula o dependente ao responsável pelo código. A mensagem de erro vem
+-- com o prefixo LINK: para o app exibir o texto sem vazar detalhes internos.
+create or replace function public.link_dependent_by_code(target_code text)
+returns public.dependents
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  normalized text;
+  claimed public.dependents;
+begin
+  if auth.uid() is null then
+    raise exception 'LINK:Entre novamente para continuar.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.profiles p
+    where p.id = auth.uid()
+      and p.role = 'responsavel'
+  ) then
+    raise exception 'LINK:Apenas o responsável pode vincular um dependente.';
+  end if;
+
+  normalized := upper(regexp_replace(coalesce(target_code, ''), '[^a-zA-Z0-9]', '', 'g'));
+  if length(normalized) <> 8 then
+    raise exception 'LINK:Código inválido. Confira o código e tente novamente.';
+  end if;
+
+  select d into claimed
+  from public.dependents d
+  where d.link_code = normalized;
+
+  if not found then
+    raise exception 'LINK:Código inválido ou não encontrado. Confira o código e tente novamente.';
+  end if;
+
+  -- Já vinculado a esta mesma conta: operação idempotente.
+  if claimed.owner_id = auth.uid() then
+    return claimed;
+  end if;
+
+  if claimed.owner_id is not null then
+    raise exception 'LINK:Este dependente já está vinculado a outro responsável.';
+  end if;
+
+  -- Reivindica o espaço. Se o dependente tiver criado a conta dele por
+  -- e-mail, o gatilho de cadastro já terá mantido user_id apontando para
+  -- a conta certa.
+  update public.dependents
+     set owner_id = auth.uid()
+   where id = claimed.id
+  returning * into claimed;
+
+  return claimed;
+end;
+$$;
+
+revoke all on function public.link_dependent_by_code(text) from public;
+grant execute on function public.link_dependent_by_code(text) to authenticated;
+
+-- Gera um código novo para o dependente; o código antigo deixa de funcionar.
+create or replace function public.regenerate_link_code(target_dependent_id uuid)
+returns text
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  target public.dependents;
+  candidate text;
+begin
+  if auth.uid() is null then
+    raise exception 'LINK:Entre novamente para continuar.';
+  end if;
+
+  select d into target
+  from public.dependents d
+  where d.id = target_dependent_id;
+
+  if not found then
+    raise exception 'LINK:Dependente não encontrado.';
+  end if;
+
+  if target.owner_id is distinct from auth.uid()
+     and target.user_id is distinct from auth.uid() then
+    raise exception 'LINK:Sem permissão para alterar este código.';
+  end if;
+
+  loop
+    candidate := public.generate_link_code();
+    if not exists (
+      select 1 from public.dependents d where d.link_code = candidate
+    ) then
+      update public.dependents set link_code = candidate where id = target.id;
+      return candidate;
+    end if;
+  end loop;
+end;
+$$;
+
+revoke all on function public.regenerate_link_code(uuid) from public;
+grant execute on function public.regenerate_link_code(uuid) to authenticated;
+
+-- ============================================================================
+-- NOTIFICAÇÕES (v3)
+-- Criadas exclusivamente por triggers/funções do banco; o cliente só lê e
+-- marca como lida. Cada notificação vai para um destinatário específico.
+-- ============================================================================
+create table if not exists public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  recipient_id uuid not null references auth.users (id) on delete cascade,
+  dependent_id uuid not null references public.dependents (id) on delete cascade,
+  type text not null check (type in ('help_request', 'task_created', 'task_reminder', 'task_completed')),
+  title text not null check (char_length(trim(title)) between 1 and 140),
+  body text not null default '' check (char_length(body) <= 300),
+  routine_item_id uuid references public.routine_items (id) on delete cascade,
+  scheduled_date date,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists notifications_recipient_created_idx
+  on public.notifications (recipient_id, created_at desc);
+
+-- Deduplicação: no máximo uma notificação por tarefa/evento/dia/destinatário.
+create unique index if not exists notifications_dedupe_unique
+  on public.notifications (recipient_id, type, routine_item_id, scheduled_date)
+  where routine_item_id is not null;
+
+alter table public.notifications enable row level security;
+
+drop policy if exists "notifications_select_own" on public.notifications;
+create policy "notifications_select_own"
+  on public.notifications for select
+  to authenticated
+  using (recipient_id = auth.uid());
+
+drop policy if exists "notifications_update_own" on public.notifications;
+create policy "notifications_update_own"
+  on public.notifications for update
+  to authenticated
+  using (recipient_id = auth.uid())
+  with check (recipient_id = auth.uid());
+
+-- Quem pode ler o quê: só as próprias notificações; e só a coluna read_at
+-- pode ser alterada pelo cliente. A criação é exclusiva do banco.
+revoke all on public.notifications from public, anon, authenticated;
+grant select on public.notifications to authenticated;
+grant update (read_at) on public.notifications to authenticated;
+
+-- Cria uma notificação para o(s) responsável(is) do dependente, ignorando
+-- quem executou a ação. Silenciosamente ignora conflitos de deduplicação.
+create or replace function public.notify_responsibles(
+  target_dependent_id uuid,
+  actor_user_id uuid,
+  notification_type text,
+  notification_title text,
+  notification_body text,
+  target_routine_item_id uuid,
+  notification_date date
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.notifications (
+    recipient_id,
+    dependent_id,
+    type,
+    title,
+    body,
+    routine_item_id,
+    scheduled_date
+  )
+  select
+    d.owner_id,
+    d.id,
+    notification_type,
+    left(notification_title, 140),
+    left(coalesce(notification_body, ''), 300),
+    target_routine_item_id,
+    notification_date
+  from public.dependents d
+  where d.id = target_dependent_id
+    and d.owner_id is not null
+    and d.owner_id is distinct from actor_user_id
+    and (
+      -- Sem item associado (ex.: pedido de ajuda), não há deduplicação:
+      -- cada evento é um alerta novo.
+      target_routine_item_id is null
+      or not exists (
+        select 1
+        from public.notifications n
+        where n.recipient_id = d.owner_id
+          and n.type = notification_type
+          and n.routine_item_id is not distinct from target_routine_item_id
+          and n.scheduled_date is not distinct from notification_date
+      )
+    );
+end;
+$$;
+
+-- Tarefa criada/programada: avisa o responsável vinculado.
+create or replace function public.routine_items_notify()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.notify_responsibles(
+    new.dependent_id,
+    auth.uid(),
+    'task_created',
+    'Nova tarefa programada',
+    format(
+      '%s %s · %s',
+      new.emoji,
+      new.title,
+      to_char(new.start_time, 'HH24:MI')
+    ),
+    new.id,
+    null
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists routine_items_notify_responsible on public.routine_items;
+create trigger routine_items_notify_responsible
+  after insert on public.routine_items
+  for each row execute function public.routine_items_notify();
+
+-- Tarefa concluída: avisa o responsável vinculado.
+create or replace function public.task_completions_notify()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  item record;
+begin
+  select r.title, r.emoji
+  into item
+  from public.routine_items r
+  where r.id = new.routine_item_id;
+
+  perform public.notify_responsibles(
+    new.dependent_id,
+    auth.uid(),
+    'task_completed',
+    'Tarefa concluída',
+    format(
+      '%s %s foi concluída',
+      coalesce(item.emoji, '✅'),
+      coalesce(item.title, 'Atividade')
+    ),
+    new.routine_item_id,
+    new.completion_date
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists task_completions_notify_responsible on public.task_completions;
+create trigger task_completions_notify_responsible
+  after insert on public.task_completions
+  for each row execute function public.task_completions_notify();
+
+-- Pedido de ajuda: avisa o responsável vinculado (deduplicação não se
+-- aplica — cada pedido é um alerta novo).
+create or replace function public.help_requests_notify()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  dependent_name text;
+begin
+  select d.name
+  into dependent_name
+  from public.dependents d
+  where d.id = new.dependent_id;
+
+  perform public.notify_responsibles(
+    new.dependent_id,
+    auth.uid(),
+    'help_request',
+    'Pedido de ajuda',
+    format('%s pediu ajuda agora', coalesce(dependent_name, 'Um dependente')),
+    null,
+    null
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists help_requests_notify_responsible on public.help_requests;
+create trigger help_requests_notify_responsible
+  after insert on public.help_requests
+  for each row execute function public.help_requests_notify();
+
+-- Lembrete no horário programado: executado pelo pg_cron a cada minuto.
+create or replace function public.run_task_reminders()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  tz constant text := 'America/Sao_Paulo';
+  inserted integer := 0;
+begin
+  with due as (
+    select
+      ri.id as routine_item_id,
+      ri.dependent_id,
+      ri.title,
+      ri.emoji,
+      ri.start_time,
+      d.owner_id,
+      d.name as dependent_name,
+      (now() at time zone tz)::date as today
+    from public.routine_items ri
+    join public.dependents d on d.id = ri.dependent_id
+    where ri.active
+      and d.owner_id is not null
+      and to_char(ri.start_time, 'HH24:MI') = to_char(now() at time zone tz, 'HH24:MI')
+      and extract(dow from now() at time zone tz)::smallint = any(ri.days)
+  ),
+  ins as (
+    insert into public.notifications (
+      recipient_id,
+      dependent_id,
+      type,
+      title,
+      body,
+      routine_item_id,
+      scheduled_date
+    )
+    select
+      due.owner_id,
+      due.dependent_id,
+      'task_reminder',
+      'Hora da tarefa',
+      left(format('%s %s · %s', due.emoji, due.title, due.dependent_name), 300),
+      due.routine_item_id,
+      due.today
+    from due
+    where not exists (
+      select 1
+      from public.notifications n
+      where n.recipient_id = due.owner_id
+        and n.type = 'task_reminder'
+        and n.routine_item_id = due.routine_item_id
+        and n.scheduled_date = due.today
+    )
+    returning 1
+  )
+  select count(*) into inserted from ins;
+  return inserted;
+end;
+$$;
+
+-- Agendamento automático do lembrete. Se o pg_cron não estiver disponível,
+-- o restante do schema é aplicado normalmente e os lembretes ficam
+-- pendentes de ativação (o app avisa in-app quando aberto).
+do $$
+begin
+  begin
+    create extension if not exists pg_cron;
+  exception
+    when others then
+      raise warning 'pg_cron não disponível: lembretes agendados não serão ativados. Dashboard → Database → Extensions → pg_cron.';
+  end;
+
+  begin
+    perform cron.unschedule('conectatea-task-reminders');
+  exception
+    when others then null;
+  end;
+
+  begin
+    perform cron.schedule(
+      'conectatea-task-reminders',
+      '* * * * *',
+      $cron$select public.run_task_reminders()$cron$
+    );
+  exception
+    when others then
+      raise warning 'Não foi possível agendar conectatea-task-reminders no pg_cron: %', sqlerrm;
+  end;
+end
+$$;
+
+-- ============================================================================
+-- INSCRIÇÕES DE NOTIFICAÇÃO PUSH (v3)
+-- Cada dispositivo do responsável guarda sua inscrição Web Push. A função de
+-- envio (Edge Function send-push) lê esta tabela com a service role.
+-- ============================================================================
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.push_subscriptions enable row level security;
+
+drop policy if exists "push_subscriptions_select_own" on public.push_subscriptions;
+create policy "push_subscriptions_select_own"
+  on public.push_subscriptions for select
+  to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists "push_subscriptions_insert_own" on public.push_subscriptions;
+create policy "push_subscriptions_insert_own"
+  on public.push_subscriptions for insert
+  to authenticated
+  with check (user_id = auth.uid());
+
+drop policy if exists "push_subscriptions_delete_own" on public.push_subscriptions;
+create policy "push_subscriptions_delete_own"
+  on public.push_subscriptions for delete
+  to authenticated
+  using (user_id = auth.uid());
+
+revoke all on public.push_subscriptions from public, anon, authenticated;
+grant select, insert, delete on public.push_subscriptions to authenticated;
+
+-- Realtime: o app recebe as notificações na hora em que são criadas.
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'notifications'
+    ) then
+      alter publication supabase_realtime add table public.notifications;
+    end if;
+  else
+    create publication supabase_realtime for table public.help_requests, public.notifications;
+  end if;
+end
+$$;

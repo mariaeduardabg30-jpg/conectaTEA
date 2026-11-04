@@ -3,11 +3,13 @@ import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import type {
   AppRole,
   AppUser,
+  AppNotification,
   Dependent,
   DependentInput,
   EmotionLog,
   HelpRequest,
   HelpSubscription,
+  NotificationType,
   RoutineItem,
   TaskCompletion,
 } from "@/lib/types";
@@ -82,6 +84,7 @@ function mapDependent(row: Row): Dependent {
     email: nullableText(row.email),
     age: nullableAge(row.age),
     userId: nullableText(row.user_id),
+    linkCode: nullableText(row.link_code),
     createdAt: text(row.created_at, new Date().toISOString()),
   };
 }
@@ -122,6 +125,37 @@ function mapEmotion(row: Row): EmotionLog {
     note: text(row.note),
     createdAt: text(row.created_at, new Date().toISOString()),
   };
+}
+
+function mapNotification(row: Row): AppNotification {
+  const rawType = text(row.type, "task_created");
+  const type: NotificationType = (
+    ["help_request", "task_created", "task_reminder", "task_completed"] as const
+  ).includes(rawType as NotificationType)
+    ? (rawType as NotificationType)
+    : "task_created";
+  return {
+    id: text(row.id),
+    recipientId: nullableText(row.recipient_id),
+    dependentId: text(row.dependent_id),
+    type,
+    title: text(row.title, "Notificação"),
+    body: text(row.body),
+    routineItemId: nullableText(row.routine_item_id),
+    scheduledDate: nullableText(row.scheduled_date),
+    readAt: nullableText(row.read_at),
+    createdAt: text(row.created_at, new Date().toISOString()),
+  };
+}
+
+/**
+ * Erros de regra de negócio levantados pelas RPCs de vinculação vêm com o
+ * prefixo LINK: para o cliente reconhecer e exibir a mensagem pronta.
+ */
+function linkError(error: { message?: string; code?: string } | null): never {
+  const message = error?.message ?? "";
+  const match = message.match(/LINK:([^\n]+)/);
+  throw new Error(match?.[1]?.trim() || "Não foi possível vincular. Tente novamente.");
 }
 
 function mapHelpRequest(row: Row): HelpRequest {
@@ -520,6 +554,88 @@ export function createSupabaseBackend(): Backend {
         .subscribe();
       return () => {
         void client.removeChannel(channel);
+      };
+    },
+
+    async linkDependentByCode(code) {
+      const client = getClient();
+      const { data, error } = await client.rpc("link_dependent_by_code", {
+        target_code: code,
+      });
+      if (error) linkError(error);
+      const row = (Array.isArray(data) ? data[0] : data) as Row | null;
+      if (!row?.id) linkError({ message: "Código inválido ou não encontrado." });
+      return mapDependent(row);
+    },
+
+    async regenerateLinkCode(dependentId) {
+      const client = getClient();
+      const { data, error } = await client.rpc("regenerate_link_code", {
+        target_dependent_id: dependentId,
+      });
+      if (error) linkError(error);
+      if (typeof data !== "string" || data.length === 0) {
+        throw new Error("Não foi possível gerar um novo código.");
+      }
+      return data;
+    },
+
+    async listNotifications() {
+      const client = getClient();
+      const { data, error } = await client
+        .from("notifications")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) fail(error);
+      return ((data ?? []) as Row[]).map(mapNotification);
+    },
+
+    async markNotificationRead(id) {
+      const client = getClient();
+      const { error } = await client
+        .from("notifications")
+        .update({ read_at: new Date().toISOString() })
+        .eq("id", id)
+        .is("read_at", null);
+      if (error) fail(error);
+    },
+
+    async markAllNotificationsRead() {
+      const client = getClient();
+      const { error } = await client
+        .from("notifications")
+        .update({ read_at: new Date().toISOString() })
+        .is("read_at", null);
+      if (error) fail(error);
+    },
+
+    subscribeNotifications(callback) {
+      const client = getClient();
+      // As notificações são pessoais: filtra pelo dono da conta. Só cria o
+      // canal depois de resolver o usuário, para nunca entregar um evento
+      // destinado a outra conta.
+      let channel: ReturnType<typeof client.channel> | null = null;
+      let cancelled = false;
+      void currentUserId()
+        .then((userId) => {
+          if (cancelled) return;
+          channel = client
+            .channel(`notifications-${Math.random().toString(36).slice(2)}`)
+            .on(
+              "postgres_changes",
+              { event: "INSERT", schema: "public", table: "notifications" },
+              (payload) => {
+                const notification = mapNotification(payload.new as Row);
+                if (notification.recipientId === userId) callback(notification);
+              },
+            )
+            .subscribe();
+        })
+        .catch(() => undefined);
+      return () => {
+        cancelled = true;
+        if (channel) void client.removeChannel(channel);
       };
     },
   };

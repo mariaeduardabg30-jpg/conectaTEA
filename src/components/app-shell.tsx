@@ -219,7 +219,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {isResponsibleAccount && (
                 <>
                   <AlertSoundToggle />
-                  <NotificationBell pending={pending} />
+                  <NotificationBell />
                 </>
               )}
               <button

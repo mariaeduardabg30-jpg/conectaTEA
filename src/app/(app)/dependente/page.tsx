@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { EmotionBadge } from "@/components/emotion-badge";
+import { LinkCodeCard } from "@/components/link-code-card";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { EmptyState, ErrorNote, LoadingBlock } from "@/components/ui/page-header";
 import { WeeklyBars } from "@/components/weekly-bars";
@@ -409,6 +410,8 @@ export default function DependentTodayPage() {
           </section>
         </div>
       </div>
+
+      <LinkCodeCard />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type {
+  AppNotification,
   AppRole,
   AppUser,
   Dependent,
@@ -7,6 +8,7 @@ import type {
   EmotionLog,
   HelpRequest,
   HelpSubscription,
+  NotificationSubscription,
   RoutineItem,
   RoutineItemInput,
   TaskCompletion,
@@ -65,4 +67,24 @@ export interface Backend {
   createHelpRequest(dependentId: string, message?: string): Promise<HelpRequest>;
   acknowledgeHelpRequest(id: string, byName: string): Promise<HelpRequest>;
   subscribeHelpRequests(callback: HelpSubscription): () => void;
+
+  /**
+   * Vincula o perfil do dependente ao responsável que chamou, a partir do
+   * código de vinculação. Lança erro com mensagem amigável quando o código
+   * não existe ou já está vinculado a outro responsável.
+   */
+  linkDependentByCode(code: string): Promise<Dependent>;
+  /** Gera um código novo para o dependente (o anterior deixa de funcionar). */
+  regenerateLinkCode(dependentId: string): Promise<string>;
+
+  /** Notificações do usuário logado, da mais recente para a mais antiga. */
+  listNotifications(): Promise<AppNotification[]>;
+  markNotificationRead(id: string): Promise<void>;
+  markAllNotificationsRead(): Promise<void>;
+  subscribeNotifications(callback: NotificationSubscription): () => void;
+  /**
+   * Opcional — apenas o modo demonstração implementa. Em produção o lembrete
+   * da tarefa é criado pelo banco de dados (função agendada), com o app fechado.
+   */
+  checkTaskReminders?(): Promise<void>;
 }

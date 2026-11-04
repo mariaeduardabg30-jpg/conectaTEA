@@ -14,6 +14,11 @@ export type Dependent = {
   age: number | null;
   /** Conta de login vinculada a este perfil (auth.users.id). */
   userId: string | null;
+  /**
+   * Código único de vinculação (8 caracteres, sem letras/números confusos).
+   * O responsável usa esse código para vincular a conta dele a este dependente.
+   */
+  linkCode: string | null;
   createdAt: string;
 };
 
@@ -86,4 +91,30 @@ export type EmotionInput = {
   note: string;
 };
 
+/** Tipos de notificação que o app entrega para o responsável. */
+export type NotificationType =
+  | "help_request"
+  | "task_created"
+  | "task_reminder"
+  | "task_completed";
+
+export type AppNotification = {
+  id: string;
+  /** Conta que recebe a notificação (o responsável vinculado). */
+  recipientId: string | null;
+  /** Dependente que originou o evento. */
+  dependentId: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  routineItemId: string | null;
+  /** Data a que a notificação se refere (lembrete/conclusão do dia). */
+  scheduledDate: string | null;
+  readAt: string | null;
+  createdAt: string;
+};
+
 export type HelpSubscription = (request: HelpRequest) => void;
+
+/** Assinatura de novas notificações. */
+export type NotificationSubscription = (notification: AppNotification) => void;

@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -13,9 +14,33 @@ import { createDemoBackend } from "@/lib/data/demo";
 import { createSupabaseBackend } from "@/lib/data/supabase";
 import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
-import type { AppRole, AppUser, Dependent, HelpRequest } from "@/lib/types";
+import { playNotificationTone } from "@/lib/audio/alerts";
+import type {
+  AppNotification,
+  AppRole,
+  AppUser,
+  Dependent,
+  HelpRequest,
+} from "@/lib/types";
 
 const ACTIVE_DEPENDENT_KEY = "conectatea.active-dependent";
+
+function browserNotify(notification: AppNotification) {
+  if (typeof window === "undefined" || typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted") return;
+  // Com a aba visível, a interface já mostra o alerta.
+  if (!document.hidden) return;
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  try {
+    new Notification(notification.title, {
+      body: notification.body,
+      icon: `${basePath}/icons/icon-192.png`,
+      tag: notification.id,
+    });
+  } catch {
+    // Alguns navegadores não implementam o construtor sem service worker.
+  }
+}
 
 type AppContextValue = {
   ready: boolean;
@@ -31,7 +56,10 @@ type AppContextValue = {
   signIn: (email: string, password: string, role?: AppRole) => Promise<AppUser>;
   signUp: (input: SignUpInput) => Promise<SignUpResult>;
   signOut: () => Promise<void>;
-  enterDemo: (role?: AppRole) => Promise<AppUser>;
+  notifications: AppNotification[];
+  unreadNotifications: number;
+  markNotificationRead: (id: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
   helpSignal: number;
   latestHelp: HelpRequest | null;
   dismissHelpAlert: () => void;
@@ -53,12 +81,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [helpSignal, setHelpSignal] = useState(0);
   const [latestHelp, setLatestHelp] = useState<HelpRequest | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const remindersCheckedAtRef = useRef<number>(0);
 
   const resetSignedOut = useCallback(() => {
     setDependents([]);
     setActiveId(null);
     setDependentsLoaded(false);
     setLatestHelp(null);
+    setNotifications([]);
   }, []);
 
   useEffect(() => {
@@ -129,6 +160,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [user, loadDependents]);
 
+  const loadNotifications = useCallback(async () => {
+    try {
+      const list = await backend.listNotifications();
+      setNotifications(list);
+    } catch {
+      setNotifications([]);
+    }
+  }, [backend]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadNotifications();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, loadNotifications]);
+
+  useEffect(() => {
+    if (!user) return;
+    return backend.subscribeNotifications((notification) => {
+      // Cada evento é processado uma única vez por dispositivo.
+      setNotifications((current) => {
+        if (current.some((item) => item.id === notification.id)) return current;
+        return [notification, ...current];
+      });
+      if (notification.type !== "help_request") void playNotificationTone();
+      browserNotify(notification);
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        navigator.vibrate(notification.type === "help_request" ? [120, 80, 120] : 60);
+      }
+      // Atualiza a lista de pedidos de ajuda se a notificação for um pedido.
+      if (notification.type === "help_request") setHelpSignal((value) => value + 1);
+    });
+  }, [backend, user]);
+
+  // No modo demonstração quem gera o lembrete de tarefa é o próprio app
+  // (com o app aberto). Em produção, o banco executa o lembrete com o app
+  // fechado, via função agendada.
+  useEffect(() => {
+    if (!user || user.role !== "responsavel") return;
+    const check = backend.checkTaskReminders;
+    if (!check) return;
+    const tick = () => {
+      const now = Date.now();
+      // No máximo uma checagem por minuto.
+      if (now - remindersCheckedAtRef.current < 45_000) return;
+      remindersCheckedAtRef.current = now;
+      void check().catch(() => undefined);
+    };
+    const interval = window.setInterval(tick, 20_000);
+    tick();
+    return () => window.clearInterval(interval);
+  }, [backend, user]);
+
   useEffect(() => {
     if (!user) return;
     return backend.subscribeHelpRequests((request) => {
@@ -176,14 +264,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     resetSignedOut();
   }, [backend, resetSignedOut]);
 
-  const enterDemo = useCallback(
-    async (role: AppRole = "responsavel") => {
-      const email = role === "dependente" ? "lia@conectatea.app" : "familia@conectatea.app";
-      const current = await backend.signIn(email, "demo", role);
-      setUser(current);
-      return current;
+  const markNotificationRead = useCallback(
+    async (id: string) => {
+      const readAt = new Date().toISOString();
+      setNotifications((current) =>
+        current.map((item) => (item.id === id && !item.readAt ? { ...item, readAt } : item)),
+      );
+      try {
+        await backend.markNotificationRead(id);
+      } catch {
+        // Recarrega do banco se a marcação falhar.
+        void loadNotifications();
+      }
     },
-    [backend],
+    [backend, loadNotifications],
+  );
+
+  const markAllNotificationsRead = useCallback(async () => {
+    const readAt = new Date().toISOString();
+    setNotifications((current) =>
+      current.map((item) => (item.readAt ? item : { ...item, readAt })),
+    );
+    try {
+      await backend.markAllNotificationsRead();
+    } catch {
+      void loadNotifications();
+    }
+  }, [backend, loadNotifications]);
+
+  const unreadNotifications = notifications.reduce(
+    (total, item) => (item.readAt ? total : total + 1),
+    0,
   );
 
   const dismissHelpAlert = useCallback(() => setLatestHelp(null), []);
@@ -206,7 +317,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       signIn,
       signUp,
       signOut,
-      enterDemo,
+      notifications,
+      unreadNotifications,
+      markNotificationRead,
+      markAllNotificationsRead,
       helpSignal,
       latestHelp,
       dismissHelpAlert,
@@ -224,7 +338,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       signIn,
       signUp,
       signOut,
-      enterDemo,
+      notifications,
+      unreadNotifications,
+      markNotificationRead,
+      markAllNotificationsRead,
       helpSignal,
       latestHelp,
       dismissHelpAlert,

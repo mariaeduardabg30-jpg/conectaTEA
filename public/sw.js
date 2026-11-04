@@ -7,11 +7,13 @@
  *  - Arquivos com hash em /_next/static: cache primeiro (nunca mudam).
  *  - Demais arquivos do próprio site: cache com revalidação em segundo plano.
  *  - Requisições de outros domínios (Supabase, por exemplo) não são tocadas.
+ *  - Push Web: exibe a notificação enviada pelo servidor e abre o app
+ *    quando a pessoa toca nela.
  *
  * Ao mudar as estratégias de cache, aumente a VERSION para limpar o cache
  * antigo de quem já instalou o app.
  */
-const VERSION = "conectatea-v1";
+const VERSION = "conectatea-v2";
 const CACHE_PREFIX = "conectatea-";
 const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
 const PAGES_CACHE = `${CACHE_PREFIX}pages-${VERSION}`;
@@ -62,6 +64,58 @@ self.addEventListener("activate", (event) => {
           .map((key) => caches.delete(key)),
       );
       await self.clients.claim();
+    })(),
+  );
+});
+
+/*
+ * Push Web (notificações com o app fechado):
+ *  - "push" mostra a notificação vinda do servidor (Edge Function send-push).
+ *  - "notificationclick" abre ou foca o app no destino indicado.
+ */
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    payload = { title: "ConectaTEA", body: event.data ? event.data.text() : "" };
+  }
+  const title = payload.title || "ConectaTEA";
+  const options = {
+    body: payload.body || "",
+    icon: `${BASE}/icons/icon-192.png`,
+    badge: `${BASE}/icons/icon-192.png`,
+    tag: payload.tag || "conectatea",
+    requireInteraction: Boolean(payload.requireInteraction),
+    data: { url: payload.url || `${BASE}/responsavel/ajuda` },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  const target =
+    (event.notification.data && event.notification.data.url) || `${BASE}/responsavel/ajuda`;
+  event.notification.close();
+  event.waitUntil(
+    (async () => {
+      const clientsArr = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      for (const client of clientsArr) {
+        if (client.url.startsWith(self.location.origin) && "focus" in client) {
+          await client.focus();
+          if ("navigate" in client && client.url !== target) {
+            try {
+              await client.navigate(target);
+            } catch {
+              // Navegação não permitida neste cliente; a aba em foco já basta.
+            }
+          }
+          return;
+        }
+      }
+      await self.clients.openWindow(target);
     })(),
   );
 });

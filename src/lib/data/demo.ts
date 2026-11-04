@@ -1,6 +1,8 @@
 import type { Backend } from "@/lib/data/backend";
 import { addDays, startOfWeek, toDateKey } from "@/lib/date";
+import { generateLinkCode, normalizeLinkCode } from "@/lib/link-code";
 import type {
+  AppNotification,
   AppRole,
   AppUser,
   Dependent,
@@ -8,6 +10,7 @@ import type {
   EmotionInput,
   EmotionLog,
   HelpRequest,
+  NotificationType,
   RoutineItem,
   RoutineItemInput,
   TaskCompletion,
@@ -17,6 +20,7 @@ const DB_KEY = "conectatea.demo.db.v2";
 const SESSION_KEY = "conectatea.demo.session.v2";
 const ACCOUNTS_KEY = "conectatea.demo.accounts.v1";
 const HELP_CHANNEL = "conectatea.help";
+const NOTIFICATION_CHANNEL = "conectatea.notifications";
 
 /** O dono do perfil fica só no demo; o app não precisa dele na interface. */
 type DemoDependent = Dependent & { ownerId: string | null };
@@ -29,6 +33,7 @@ type DemoDatabase = {
   completions: TaskCompletion[];
   emotions: EmotionLog[];
   helpRequests: HelpRequest[];
+  notifications: AppNotification[];
 };
 
 type DemoSession = AppUser & { createdAt: string };
@@ -81,6 +86,7 @@ function seed(): DemoDatabase {
     email: "lia@conectatea.app",
     age: 12,
     userId: null,
+    linkCode: generateLinkCode(),
     ownerId: "demo-responsavel",
     createdAt: iso(120, 9),
   };
@@ -92,6 +98,7 @@ function seed(): DemoDatabase {
     email: "miguel@conectatea.app",
     age: 10,
     userId: null,
+    linkCode: generateLinkCode(),
     ownerId: "demo-responsavel",
     createdAt: iso(110, 9),
   };
@@ -275,7 +282,7 @@ function seed(): DemoDatabase {
     },
   ];
 
-  return { dependents: [lia, miguel], routineItems, completions, emotions, helpRequests };
+  return { dependents: [lia, miguel], routineItems, completions, emotions, helpRequests, notifications: [] };
 }
 
 function readDb(): DemoDatabase {
@@ -287,7 +294,25 @@ function readDb(): DemoDatabase {
       window.localStorage.setItem(DB_KEY, JSON.stringify(initial));
       return initial;
     }
-    return JSON.parse(raw) as DemoDatabase;
+    const parsed = JSON.parse(raw) as DemoDatabase;
+    // Bancos criados antes dos códigos de vinculação recebem um código único.
+    const existing = new Set(
+      parsed.dependents.map((dependent) => dependent.linkCode).filter(Boolean) as string[],
+    );
+    let migrated = false;
+    parsed.dependents = parsed.dependents.map((dependent) => {
+      if (dependent.linkCode) return dependent;
+      migrated = true;
+      const linkCode = generateLinkCode(existing);
+      existing.add(linkCode);
+      return { ...dependent, linkCode };
+    });
+    if (!Array.isArray(parsed.notifications)) {
+      parsed.notifications = [];
+      migrated = true;
+    }
+    if (migrated) window.localStorage.setItem(DB_KEY, JSON.stringify(parsed));
+    return parsed;
   } catch {
     return seed();
   }
@@ -301,7 +326,10 @@ function writeDb(db: DemoDatabase): void {
 function readSession(): DemoSession | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(SESSION_KEY);
+    // A sessão fica por aba (como se fosse um dispositivo separado), enquanto
+    // o banco demo fica no localStorage compartilhado — assim responsável e
+    // dependente podem usar duas abas na mesma máquina.
+    const raw = window.sessionStorage.getItem(SESSION_KEY);
     return raw ? (JSON.parse(raw) as DemoSession) : null;
   } catch {
     return null;
@@ -310,21 +338,18 @@ function readSession(): DemoSession | null {
 
 function writeSession(user: DemoSession | null): void {
   if (typeof window === "undefined") return;
-  if (user) window.localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-  else window.localStorage.removeItem(SESSION_KEY);
+  if (user) {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
+    // Limpa a sessão antiga compartilhada entre abas, de versões anteriores.
+    window.localStorage.removeItem(SESSION_KEY);
+  } else {
+    window.sessionStorage.removeItem(SESSION_KEY);
+    window.localStorage.removeItem(SESSION_KEY);
+  }
 }
 
 function slugEmail(email: string): string {
   return email.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
-function emailName(email: string, role: AppRole): string {
-  const local = email.split("@")[0]?.replace(/[._-]+/g, " ").trim();
-  if (!local) return role === "responsavel" ? "Responsável" : "Dependente";
-  if (role === "responsavel" && email.toLowerCase() === "familia@conectatea.app") {
-    return "Família Oliveira";
-  }
-  return local.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function makeSession(input: {
@@ -423,6 +448,7 @@ function ensureDependentProfile(user: DemoSession): void {
     email: user.email,
     age: user.age,
     userId: user.id,
+    linkCode: generateLinkCode(new Set(db.dependents.map((dependent) => dependent.linkCode ?? ""))),
     ownerId: null,
     createdAt: new Date().toISOString(),
   });
@@ -438,6 +464,7 @@ function publicDependent(dependent: DemoDependent): Dependent {
     email: dependent.email,
     age: dependent.age,
     userId: dependent.userId,
+    linkCode: dependent.linkCode ?? null,
     createdAt: dependent.createdAt,
   };
 }
@@ -481,6 +508,66 @@ export function createDemoBackend(): Backend {
     }
   };
 
+  const broadcastNotification = (notification: AppNotification) => {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+      new CustomEvent<AppNotification>("conectatea:notification", { detail: notification }),
+    );
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel(NOTIFICATION_CHANNEL);
+      channel.postMessage(notification);
+      channel.close();
+    }
+  };
+
+  /**
+   * Cria uma notificação para o(s) responsável(is) vinculado(s) a um dependente.
+   * O ator é ignorado: quem fez a ação não é avisado sobre ela mesmo.
+   * Em produção quem cria as notificações é o banco (triggers); aqui o demo
+   * replica o mesmo comportamento.
+   */
+  const notifyResponsibles = (input: {
+    actorId: string | null;
+    dependentId: string;
+    type: NotificationType;
+    title: string;
+    body: string;
+    routineItemId?: string;
+    scheduledDate?: string | null;
+  }) => {
+    const db = readDb();
+    const dependent = db.dependents.find((item) => item.id === input.dependentId);
+    const ownerId = dependent?.ownerId ?? null;
+    if (!ownerId || ownerId === input.actorId) return;
+    // Não duplica: mesma tarefa, mesmo evento, mesma data. Pedidos de ajuda
+    // são sempre novos, nunca duplicados.
+    if (input.type !== "help_request") {
+      const duplicate = db.notifications.some(
+        (item) =>
+          item.recipientId === ownerId &&
+          item.type === input.type &&
+          item.routineItemId === (input.routineItemId ?? null) &&
+          (item.scheduledDate ?? null) === (input.scheduledDate ?? null),
+      );
+      if (duplicate) return;
+    }
+    const notification: AppNotification = {
+      id: uid(),
+      recipientId: ownerId,
+      dependentId: input.dependentId,
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      routineItemId: input.routineItemId ?? null,
+      scheduledDate: input.scheduledDate ?? null,
+      readAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    db.notifications.unshift(notification);
+    writeDb(db);
+    broadcastNotification(notification);
+  };
+
   return {
     mode: "demo",
 
@@ -501,7 +588,7 @@ export function createDemoBackend(): Backend {
       return () => undefined;
     },
 
-    async signIn(email, password, role) {
+    async signIn(email, password) {
       await delay(160);
       const cleanEmail = email.trim();
       if (!cleanEmail || !cleanEmail.includes("@") || password.trim().length < 4) {
@@ -518,14 +605,7 @@ export function createDemoBackend(): Backend {
         if (account.password !== password) throw new Error("E-mail ou senha incorretos.");
         user = makeSession(account);
       } else {
-        // A demonstração aceita qualquer e-mail/senha; o papel vem da aba escolhida.
-        const chosenRole: AppRole = role ?? "responsavel";
-        user = makeSession({
-          email: cleanEmail,
-          name: emailName(cleanEmail, chosenRole),
-          role: chosenRole,
-          age: null,
-        });
+        throw new Error("E-mail ou senha incorretos. Crie sua conta na aba \"Criar conta\".");
       }
 
       writeSession(user);
@@ -630,6 +710,7 @@ export function createDemoBackend(): Backend {
           age: input.age,
           ownerId: session.id,
           userId: linked?.id ?? claimable.userId,
+          linkCode: claimable.linkCode ?? generateLinkCode(),
         });
         writeDb(db);
         return publicDependent(claimable);
@@ -654,6 +735,7 @@ export function createDemoBackend(): Backend {
         email,
         age: input.age,
         userId: linked?.id ?? null,
+        linkCode: generateLinkCode(new Set(db.dependents.map((item) => item.linkCode ?? ""))),
         ownerId: session.id,
         createdAt: new Date().toISOString(),
       };
@@ -733,6 +815,15 @@ export function createDemoBackend(): Backend {
       };
       db.routineItems.push(item);
       writeDb(db);
+      const session = readSession();
+      notifyResponsibles({
+        actorId: session?.id ?? null,
+        dependentId,
+        type: "task_created",
+        title: "Nova tarefa programada",
+        body: `${input.emoji} ${input.title} · ${input.startTime}`,
+        routineItemId: item.id,
+      });
       return item;
     },
 
@@ -786,6 +877,19 @@ export function createDemoBackend(): Backend {
           date,
           completedAt: new Date().toISOString(),
         });
+        writeDb(db);
+        const session = readSession();
+        const item = db.routineItems.find((entry) => entry.id === routineItemId);
+        notifyResponsibles({
+          actorId: session?.id ?? null,
+          dependentId,
+          type: "task_completed",
+          title: "Tarefa concluída",
+          body: `${item?.emoji ?? "✅"} ${item?.title ?? "Atividade"} foi concluída`,
+          routineItemId,
+          scheduledDate: date,
+        });
+        return;
       }
       writeDb(db);
     },
@@ -837,6 +941,15 @@ export function createDemoBackend(): Backend {
       };
       db.helpRequests.unshift(request);
       writeDb(db);
+      const session = readSession();
+      const dependent = db.dependents.find((item) => item.id === dependentId);
+      notifyResponsibles({
+        actorId: session?.id ?? null,
+        dependentId,
+        type: "help_request",
+        title: "Pedido de ajuda",
+        body: `${dependent?.name ?? "Dependente"} pediu ajuda agora`,
+      });
       broadcastHelp(request);
       return request;
     },
@@ -869,6 +982,170 @@ export function createDemoBackend(): Backend {
         window.removeEventListener("conectatea:help", localHandler);
         channel?.close();
       };
+    },
+
+    async linkDependentByCode(code) {
+      await delay(120);
+      const session = readSession();
+      if (!session) throw new Error("Entre novamente para continuar.");
+      if (session.role !== "responsavel") {
+        throw new Error("Apenas o responsável pode vincular um dependente.");
+      }
+      const normalized = normalizeLinkCode(code);
+      if (normalized.length !== 8) {
+        throw new Error("Código inválido. Confira o código e tente novamente.");
+      }
+      const db = readDb();
+      const target = db.dependents.find(
+        (dependent) => normalizeLinkCode(dependent.linkCode ?? "") === normalized,
+      );
+      if (!target) {
+        throw new Error(
+          "Código inválido ou não encontrado. Confira o código e tente novamente.",
+        );
+      }
+      // Já vinculado a esta mesma conta: operação idempotente.
+      if (target.ownerId === session.id) return publicDependent(target);
+      if (target.ownerId) {
+        throw new Error("Este dependente já está vinculado a outro responsável.");
+      }
+      target.ownerId = session.id;
+      if (!target.userId && target.email) {
+        const account = readAccounts().find(
+          (item) =>
+            item.role === "dependente" &&
+            item.email.toLowerCase() === target.email!.toLowerCase(),
+        );
+        if (account) target.userId = account.id;
+      }
+      writeDb(db);
+      return publicDependent(target);
+    },
+
+    async regenerateLinkCode(dependentId) {
+      await delay(120);
+      const session = readSession();
+      if (!session) throw new Error("Entre novamente para continuar.");
+      const db = readDb();
+      const target = db.dependents.find((dependent) => dependent.id === dependentId);
+      if (!target) throw new Error("Dependente não encontrado.");
+      const allowed = target.ownerId === session.id || target.userId === session.id;
+      if (!allowed) throw new Error("Sem permissão para alterar este código.");
+      target.linkCode = generateLinkCode(
+        new Set(db.dependents.map((dependent) => dependent.linkCode ?? "")),
+      );
+      writeDb(db);
+      return target.linkCode;
+    },
+
+    async listNotifications() {
+      await delay(60);
+      const session = readSession();
+      if (!session) return [];
+      return readDb()
+        .notifications.filter((item) => item.recipientId === session.id)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+
+    async markNotificationRead(id) {
+      const session = readSession();
+      if (!session) return;
+      const db = readDb();
+      const target = db.notifications.find(
+        (item) => item.id === id && item.recipientId === session.id,
+      );
+      if (target && !target.readAt) {
+        target.readAt = new Date().toISOString();
+        writeDb(db);
+      }
+    },
+
+    async markAllNotificationsRead() {
+      const session = readSession();
+      if (!session) return;
+      const db = readDb();
+      let changed = false;
+      for (const item of db.notifications) {
+        if (item.recipientId === session.id && !item.readAt) {
+          item.readAt = new Date().toISOString();
+          changed = true;
+        }
+      }
+      if (changed) writeDb(db);
+    },
+
+    subscribeNotifications(callback) {
+      if (typeof window === "undefined") return () => undefined;
+      const session = readSession();
+      const handle = (notification: AppNotification) => {
+        if (session && notification.recipientId === session.id) callback(notification);
+      };
+      const localHandler = (event: Event) => {
+        handle((event as CustomEvent<AppNotification>).detail);
+      };
+      window.addEventListener("conectatea:notification", localHandler);
+      const channel =
+        "BroadcastChannel" in window ? new BroadcastChannel(NOTIFICATION_CHANNEL) : null;
+      if (channel) {
+        channel.onmessage = (event: MessageEvent<AppNotification>) => handle(event.data);
+      }
+      return () => {
+        window.removeEventListener("conectatea:notification", localHandler);
+        channel?.close();
+      };
+    },
+
+    // Apenas no modo demonstração: confere as tarefas de hoje e dispara o
+    // lembrete no horário programado. Em produção, quem cria os lembretes é
+    // o banco de dados (função agendada), mesmo com o app fechado.
+    async checkTaskReminders() {
+      const session = readSession();
+      if (!session || session.role !== "responsavel") return;
+      const db = readDb();
+      const now = new Date();
+      const toMinutes = (time: string) =>
+        Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+      const current = toMinutes(
+        `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+      );
+      const today = now.getDay();
+      const dateKey = toDateKey(now);
+      const owned = db.dependents.filter((dependent) => dependent.ownerId === session.id);
+      for (const dependent of owned) {
+        const items = db.routineItems.filter((item) => {
+          if (!item.dependentId) return false;
+          if (!item.active || !item.days.includes(today)) return false;
+          const itemStart = toMinutes(item.startTime);
+          // No horário ou até 2 horas depois: lembra no momento certo e não
+          // perde o aviso para quem abre o app um pouco mais tarde.
+          return itemStart <= current && current - itemStart <= 120;
+        });
+        for (const item of items) {
+          const exists = db.notifications.some(
+            (notification) =>
+              notification.recipientId === session.id &&
+              notification.type === "task_reminder" &&
+              notification.routineItemId === item.id &&
+              notification.scheduledDate === dateKey,
+          );
+          if (exists) continue;
+          const notification: AppNotification = {
+            id: uid(),
+            recipientId: session.id,
+            dependentId: dependent.id,
+            type: "task_reminder",
+            title: "Hora da tarefa",
+            body: `${item.emoji} ${item.title} · ${dependent.name}`,
+            routineItemId: item.id,
+            scheduledDate: dateKey,
+            readAt: null,
+            createdAt: new Date().toISOString(),
+          };
+          db.notifications.unshift(notification);
+          writeDb(db);
+          broadcastNotification(notification);
+        }
+      }
     },
   };
 }

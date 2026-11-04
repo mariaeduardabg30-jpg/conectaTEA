@@ -1,5 +1,5 @@
 -- ============================================================================
--- ConectaTEA · reset do schema do app novo (Next.js · v2 com papéis)
+-- ConectaTEA · reset do schema do app novo (Next.js · v3)
 --
 -- ██  ATENÇÃO: APAGA DADOS  ██
 -- Remove as tabelas do app novo e recria do zero quando você rodar
@@ -11,12 +11,24 @@
 -- ============================================================================
 
 -- Tabelas do app novo ---------------------------------------------------------
+drop table if exists public.push_subscriptions cascade;
+drop table if exists public.notifications cascade;
 drop table if exists public.task_completions cascade;
 drop table if exists public.emotion_logs cascade;
 drop table if exists public.help_requests cascade;
 drop table if exists public.routine_items cascade;
 drop table if exists public.dependents cascade;
 drop table if exists public.profiles cascade;
+
+-- Agendamento do pg_cron ------------------------------------------------------
+do $$
+begin
+  begin
+    perform cron.unschedule('conectatea-task-reminders');
+  exception when others then null;
+  end;
+end
+$$;
 
 -- Gatilho em auth.users -------------------------------------------------------
 drop trigger if exists on_auth_user_created on auth.users;
@@ -29,6 +41,15 @@ drop function if exists public.handle_new_user();
 drop function if exists public.link_dependent_account();
 drop function if exists public.prevent_profile_role_change();
 drop function if exists public.touch_updated_at();
+drop function if exists public.generate_link_code();
+drop function if exists public.dependents_set_link_code();
+drop function if exists public.link_dependent_by_code(text);
+drop function if exists public.regenerate_link_code(uuid);
+drop function if exists public.notify_responsibles(uuid, uuid, text, text, text, uuid, date);
+drop function if exists public.routine_items_notify();
+drop function if exists public.task_completions_notify();
+drop function if exists public.help_requests_notify();
+drop function if exists public.run_task_reminders();
 
 -- Tipo de papel ---------------------------------------------------------------
 drop type if exists public.app_role;

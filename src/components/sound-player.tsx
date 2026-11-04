@@ -199,7 +199,7 @@ export function SoundPlayer() {
                 step="0.01"
                 value={volume}
                 onChange={(event) => setVolume(Number(event.target.value))}
-                className="h-2 w-full max-w-52 cursor-pointer appearance-none rounded-full bg-white/80 accent-[#2d6b5e]"
+                className="h-2 w-full max-w-52 cursor-pointer appearance-none rounded-full bg-white/80 accent-[#1f6fbe]"
                 aria-valuetext={`${Math.round(volume * 100)}%`}
               />
               <Volume2 className="size-5 shrink-0 text-ink-soft" aria-hidden />

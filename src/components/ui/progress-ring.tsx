@@ -2,7 +2,7 @@ export function ProgressRing({
   done,
   total,
   size = 124,
-  color = "#2d6b5e",
+  color = "#1f6fbe",
   label,
 }: {
   done: number;
@@ -24,7 +24,7 @@ export function ProgressRing({
       aria-label={label ?? `${done} de ${total} atividades concluídas (${percentage}%)`}
     >
       <svg viewBox="0 0 120 120" className="size-full -rotate-90">
-        <circle cx="60" cy="60" r={radius} fill="none" stroke="#ece4d4" strokeWidth="11" />
+        <circle cx="60" cy="60" r={radius} fill="none" stroke="#ece8dd" strokeWidth="11" />
         <circle
           cx="60"
           cy="60"

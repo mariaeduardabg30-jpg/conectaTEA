@@ -1,5 +1,5 @@
 -- ============================================================================
--- ConectaTEA · verificação da estrutura do Supabase (v2 · papéis)
+-- ConectaTEA · verificação da estrutura do Supabase (v3)
 -- Somente leitura: não cria, não altera e não apaga nada.
 -- Cole tudo no SQL Editor do projeto e rode. Cada consulta devolve "ok" ou
 -- "FALTANDO" para você comparar com supabase/schema.sql.
@@ -13,7 +13,9 @@ with esperadas(nome) as (
     ('routine_items'),
     ('task_completions'),
     ('emotion_logs'),
-    ('help_requests')
+    ('help_requests'),
+    ('notifications'),
+    ('push_subscriptions')
 )
 select
   '1. tabela' as verificacao,
@@ -44,6 +46,7 @@ with esperadas(tabela, coluna) as (
     ('dependents', 'email'),
     ('dependents', 'age'),
     ('dependents', 'user_id'),
+    ('dependents', 'link_code'),
     ('dependents', 'created_at'),
 
     ('routine_items', 'id'),
@@ -75,7 +78,25 @@ with esperadas(tabela, coluna) as (
     ('help_requests', 'message'),
     ('help_requests', 'created_at'),
     ('help_requests', 'acknowledged_at'),
-    ('help_requests', 'acknowledged_by')
+    ('help_requests', 'acknowledged_by'),
+
+    ('notifications', 'id'),
+    ('notifications', 'recipient_id'),
+    ('notifications', 'dependent_id'),
+    ('notifications', 'type'),
+    ('notifications', 'title'),
+    ('notifications', 'body'),
+    ('notifications', 'routine_item_id'),
+    ('notifications', 'scheduled_date'),
+    ('notifications', 'read_at'),
+    ('notifications', 'created_at'),
+
+    ('push_subscriptions', 'id'),
+    ('push_subscriptions', 'user_id'),
+    ('push_subscriptions', 'endpoint'),
+    ('push_subscriptions', 'p256dh'),
+    ('push_subscriptions', 'auth'),
+    ('push_subscriptions', 'created_at')
 )
 select
   '2. coluna' as verificacao,
@@ -108,7 +129,8 @@ from pg_tables
 where schemaname = 'public'
   and tablename in (
     'profiles', 'dependents', 'routine_items',
-    'task_completions', 'emotion_logs', 'help_requests'
+    'task_completions', 'emotion_logs', 'help_requests',
+    'notifications', 'push_subscriptions'
   )
 order by status desc, tablename;
 
@@ -121,7 +143,8 @@ from pg_policies
 where schemaname = 'public'
   and tablename in (
     'profiles', 'dependents', 'routine_items',
-    'task_completions', 'emotion_logs', 'help_requests'
+    'task_completions', 'emotion_logs', 'help_requests',
+    'notifications', 'push_subscriptions'
   )
 group by tablename
 order by tablename;
@@ -144,7 +167,15 @@ where n.nspname = 'public'
     'handle_new_user',
     'link_dependent_account',
     'prevent_profile_role_change',
-    'touch_updated_at'
+    'touch_updated_at',
+    'link_dependent_by_code',
+    'regenerate_link_code',
+    'notify_responsibles',
+    'routine_items_notify',
+    'task_completions_notify',
+    'help_requests_notify',
+    'run_task_reminders',
+    'dependents_set_link_code'
   )
 order by p.proname;
 
@@ -158,7 +189,11 @@ where trigger_name in (
   'on_auth_user_created',
   'dependents_link_account',
   'profiles_protect_role',
-  'profiles_touch_updated_at'
+  'profiles_touch_updated_at',
+  'dependents_set_link_code',
+  'routine_items_notify_responsible',
+  'task_completions_notify_responsible',
+  'help_requests_notify_responsible'
 )
 order by event_object_table, trigger_name;
 
@@ -181,19 +216,27 @@ select
   indexdef as status
 from pg_indexes
 where schemaname = 'public'
-  and indexname in ('dependents_user_id_unique', 'dependents_email_unique')
+  and indexname in (
+    'dependents_user_id_unique',
+    'dependents_email_unique',
+    'dependents_link_code_unique',
+    'notifications_dedupe_unique',
+    'notifications_recipient_created_idx'
+  )
 order by indexname;
 
--- 9) Realtime para pedidos de ajuda ------------------------------------------
+-- 9) Realtime para pedidos de ajuda e notificações ---------------------------
 select
   '9. realtime' as verificacao,
-  'help_requests' as objeto,
+  tablename as objeto,
   case when exists (
     select 1 from pg_publication_tables
     where pubname = 'supabase_realtime'
       and schemaname = 'public'
-      and tablename = 'help_requests'
-  ) then 'ok' else 'FALTANDO' end as status;
+      and tablename = t.tablename
+  ) then 'ok' else 'FALTANDO' end as status
+from (values ('help_requests'), ('notifications')) as t(tablename)
+order by tablename;
 
 -- 10) Privilégios das roles do Supabase --------------------------------------
 select
@@ -205,7 +248,8 @@ where table_schema = 'public'
   and grantee in ('anon', 'authenticated')
   and table_name in (
     'profiles', 'dependents', 'routine_items',
-    'task_completions', 'emotion_logs', 'help_requests'
+    'task_completions', 'emotion_logs', 'help_requests',
+    'notifications', 'push_subscriptions'
   )
 group by table_name, grantee
 order by table_name, grantee;
@@ -224,6 +268,22 @@ where schemaname = 'public'
     'app_settings', 'notification_devices', 'communication_cards'
   )
 order by tablename;
+
+-- 12) Agendamento do lembrete de tarefas (pg_cron) ---------------------------
+do $$
+begin
+  begin
+    if exists (select 1 from cron.job where jobname = 'conectatea-task-reminders') then
+      raise notice '12. pg_cron · conectatea-task-reminders · ok';
+    else
+      raise notice '12. pg_cron · conectatea-task-reminders · FALTANDO (rode o schema.sql)';
+    end if;
+  exception
+    when others then
+      raise notice '12. pg_cron · FALTANDO (extensão pg_cron não disponível — lembretes agendados não rodam)';
+  end;
+end
+$$;
 
 select
   '11. coluna legada' as verificacao,

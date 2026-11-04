@@ -64,6 +64,22 @@ export async function playHelpAlert(): Promise<void> {
   });
 }
 
+/** Tom curto e suave para novas notificações (tarefas, lembretes). */
+export async function playNotificationTone(): Promise<void> {
+  const context = getContext();
+  if (!context) return;
+  if (context.state === "suspended") {
+    try {
+      await context.resume();
+    } catch {
+      return;
+    }
+  }
+  const now = context.currentTime + 0.02;
+  note(context, 587.33, now, 0.18, 0.06, "sine");
+  note(context, 880, now + 0.09, 0.28, 0.06, "sine");
+}
+
 /** Som curto de confirmação para ações do dependente. */
 export async function playConfirmationTone(): Promise<void> {
   const context = getContext();

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   CalendarDays,
+  Link2,
   Mail,
   PencilLine,
   Plus,
@@ -15,6 +16,7 @@ import {
   Users,
 } from "lucide-react";
 import { DependentFormModal } from "@/components/dependent-form";
+import { LinkDependentModal } from "@/components/link-dependent-modal";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState, ErrorNote, LoadingBlock, PageHeader } from "@/components/ui/page-header";
 import { InlineSpinner } from "@/components/ui/page-header";
@@ -35,6 +37,7 @@ export default function DependentsPage() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Dependent | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Dependent | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,10 +85,20 @@ export default function DependentsPage() {
         title="Cada pessoa, um espaço próprio"
         description="Crie e organize os perfis da família. Cada dependente tem sua própria rotina, registros emocionais e histórico de ajuda."
         actions={
-          <button type="button" onClick={openNew} className="btn-primary">
-            <Plus className="size-4" aria-hidden />
-            Novo dependente
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setLinkOpen(true)}
+              className="btn-secondary"
+            >
+              <Link2 className="size-4" aria-hidden />
+              Vincular dependente
+            </button>
+            <button type="button" onClick={openNew} className="btn-primary">
+              <Plus className="size-4" aria-hidden />
+              Novo dependente
+            </button>
+          </div>
         }
       />
 
@@ -105,13 +118,19 @@ export default function DependentsPage() {
           <EmptyState
             emoji="🌱"
             title="Nenhum perfil por aqui ainda"
-            description="Adicione a primeira pessoa para começar a organizar a rotina e acompanhar as emoções."
+            description="Adicione a primeira pessoa para começar a organizar a rotina, ou vincule um dependente que já criou a própria conta com um código."
             tone="primary"
             action={
-              <button type="button" onClick={openNew} className="btn-primary">
-                <Plus className="size-4" aria-hidden />
-                Criar primeiro perfil
-              </button>
+              <div className="flex flex-col items-center justify-center gap-2 sm:flex-row">
+                <button type="button" onClick={openNew} className="btn-primary">
+                  <Plus className="size-4" aria-hidden />
+                  Criar primeiro perfil
+                </button>
+                <button type="button" onClick={() => setLinkOpen(true)} className="btn-secondary">
+                  <Link2 className="size-4" aria-hidden />
+                  Vincular com código
+                </button>
+              </div>
             }
           />
         </div>
@@ -124,7 +143,7 @@ export default function DependentsPage() {
                 key={dependent.id}
                 className="card overflow-hidden"
                 style={{
-                  background: `linear-gradient(160deg, ${withAlpha(dependent.color, 0.28)} 0%, #FFFCF6 52%)`,
+                  background: `linear-gradient(160deg, ${withAlpha(dependent.color, 0.28)} 0%, #ffffff 52%)`,
                 }}
               >
                 <div className="p-5">
@@ -268,6 +287,14 @@ export default function DependentsPage() {
             void refreshDependents();
             setNotice(editing ? "Perfil atualizado." : "Perfil criado com sucesso.");
           }}
+        />
+      )}
+
+      {linkOpen && (
+        <LinkDependentModal
+          open={linkOpen}
+          onClose={() => setLinkOpen(false)}
+          onLinked={(name) => setNotice(`${name} vinculado com sucesso. Agora vocês se acompanham por aqui.`)}
         />
       )}
 

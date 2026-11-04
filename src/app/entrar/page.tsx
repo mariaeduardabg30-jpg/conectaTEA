@@ -12,7 +12,6 @@ import {
   EyeOff,
   HeartPulse,
   LifeBuoy,
-  Loader2,
   LockKeyhole,
   Mail,
   Music2,
@@ -42,19 +41,17 @@ export default function LoginPage() {
     dependentsLoaded,
     signIn,
     signUp,
-    enterDemo,
     setActiveDependentId,
   } = useApp();
 
   const [tab, setTab] = useState<Tab>("responsavel");
-  const [view, setView] = useState<View>("login");
+  const [view, setView] = useState<View>("signup");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [age, setAge] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [startingDemo, setStartingDemo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -146,19 +143,6 @@ export default function LoginPage() {
       setError(friendlyAuthError(cause));
     } finally {
       setLoading(false);
-    }
-  };
-
-  const enterDemoAs = async (role: Tab) => {
-    setError(null);
-    setStartingDemo(true);
-    try {
-      const current = await enterDemo(role);
-      router.replace(destinationFor(current));
-    } catch (cause) {
-      setError(friendlyAuthError(cause));
-    } finally {
-      setStartingDemo(false);
     }
   };
 
@@ -341,29 +325,11 @@ export default function LoginPage() {
                 </p>
 
                 {isDemo && (
-                  <div className="mt-4 rounded-2xl border border-dashed border-accent/40 bg-accent-soft/60 px-4 py-3">
-                    <p className="flex items-center gap-1.5 text-xs font-extrabold text-accent">
-                      <Sparkles className="size-3.5" aria-hidden />
-                      Modo demonstração
-                    </p>
-                    <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-                      Use qualquer e-mail e senha com 4+ caracteres, ou entre direto com os dados de
-                      exemplo.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => enterDemoAs(tab)}
-                      disabled={startingDemo}
-                      className="mt-2.5 inline-flex min-h-9 items-center gap-2 rounded-full bg-accent px-3.5 py-1.5 text-xs font-extrabold text-white transition hover:brightness-105 disabled:opacity-60"
-                    >
-                      {startingDemo ? (
-                        <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                      ) : (
-                        <ArrowRight className="size-3.5" aria-hidden />
-                      )}
-                      {isDependent ? "Entrar como Lia (exemplo)" : "Entrar com dados de exemplo"}
-                    </button>
-                  </div>
+                  <p className="mt-4 rounded-2xl border border-dashed border-line-strong bg-surface-2 px-4 py-3 text-xs leading-relaxed text-muted">
+                    <span className="font-extrabold text-accent">Modo demonstração.</span> As contas e
+                    os dados ficam guardados apenas neste navegador. Para um ambiente real com login
+                    seguro para a família, configure o Supabase (veja o README).
+                  </p>
                 )}
 
                 <form
