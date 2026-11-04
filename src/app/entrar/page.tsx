@@ -61,7 +61,6 @@ export default function LoginPage() {
 
   const switchTab = (next: Tab) => {
     setTab(next);
-    setView("login");
     setError(null);
     setNotice(null);
     setAge("");

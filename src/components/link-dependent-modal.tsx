@@ -19,7 +19,7 @@ export function LinkDependentModal({
   onClose: () => void;
   onLinked: (name: string) => void;
 }) {
-  const { backend, refreshDependents } = useApp();
+  const { backend, refreshDependents, mode } = useApp();
   const [value, setValue] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +71,17 @@ export function LinkDependentModal({
       size="sm"
     >
       <form className="space-y-4" onSubmit={submit}>
+        {mode === "demo" && (
+          <div className="rounded-2xl border border-accent/25 bg-accent-soft px-4 py-3">
+            <p className="text-xs font-extrabold text-accent">Modo demonstração</p>
+            <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+              Aqui as contas ficam salvas apenas neste navegador. O código funciona quando o
+              dependente usa <strong>o mesmo navegador</strong> — para vincular de outro celular ou
+              computador é preciso configurar o Supabase (veja o README).
+            </p>
+          </div>
+        )}
+
         <div className="flex items-start gap-3 rounded-2xl bg-primary-soft/50 px-4 py-3">
           <UserRound className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
           <ol className="list-none space-y-1 text-xs leading-relaxed text-primary-strong">

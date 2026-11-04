@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { Brand, LogoMark } from "@/components/brand";
+import { InstallApp } from "@/components/install-app";
 
 const DEPENDENT_FEATURES = [
   {
@@ -97,10 +98,13 @@ export default function LandingPage() {
             Acessibilidade
           </a>
         </nav>
-        <Link href="/entrar" className="btn-primary">
-          Entrar
-          <ArrowRight className="size-4" aria-hidden />
-        </Link>
+        <div className="flex items-center gap-2">
+          <InstallApp className="btn-ghost min-h-10 px-3 text-sm" />
+          <Link href="/entrar" className="btn-primary">
+            Entrar
+            <ArrowRight className="size-4" aria-hidden />
+          </Link>
+        </div>
       </header>
 
       <main>

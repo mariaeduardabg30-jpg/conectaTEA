@@ -13,7 +13,7 @@
  * Ao mudar as estratégias de cache, aumente a VERSION para limpar o cache
  * antigo de quem já instalou o app.
  */
-const VERSION = "conectatea-v2";
+const VERSION = "conectatea-v3";
 const CACHE_PREFIX = "conectatea-";
 const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
 const PAGES_CACHE = `${CACHE_PREFIX}pages-${VERSION}`;

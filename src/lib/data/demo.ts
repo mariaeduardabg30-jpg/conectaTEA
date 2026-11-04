@@ -1001,7 +1001,7 @@ export function createDemoBackend(): Backend {
       );
       if (!target) {
         throw new Error(
-          "Código inválido ou não encontrado. Confira o código e tente novamente.",
+          "Código não encontrado. No modo demonstração o código só funciona no mesmo navegador onde a conta do dependente foi criada.",
         );
       }
       // Já vinculado a esta mesma conta: operação idempotente.

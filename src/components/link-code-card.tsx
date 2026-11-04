@@ -12,7 +12,7 @@ import { formatLinkCode } from "@/lib/link-code";
  * rotina, as emoções e os pedidos de ajuda deste perfil.
  */
 export function LinkCodeCard() {
-  const { user, activeDependent, backend, refreshDependents } = useApp();
+  const { user, activeDependent, backend, refreshDependents, mode } = useApp();
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -167,10 +167,18 @@ export function LinkCodeCard() {
 
       <div className="flex items-start gap-2 border-t border-line/70 bg-surface-2/60 px-5 py-2.5">
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-        <p className="text-[0.68rem] leading-relaxed text-muted">
-          Só o seu responsável, com este código, consegue acompanhar o seu espaço. Se você achar
-          que alguém viu o código sem autorização, gere um novo acima.
-        </p>
+        <div>
+          <p className="text-[0.68rem] leading-relaxed text-muted">
+            Só o seu responsável, com este código, consegue acompanhar o seu espaço. Se você achar
+            que alguém viu o código sem autorização, gere um novo acima.
+          </p>
+          {mode === "demo" && (
+            <p className="mt-1 text-[0.68rem] font-bold leading-relaxed text-accent">
+              Modo demonstração: este código só funciona no mesmo navegador onde esta conta foi
+              criada. Para vincular de outro aparelho, configure o Supabase.
+            </p>
+          )}
+        </div>
       </div>
     </section>
   );

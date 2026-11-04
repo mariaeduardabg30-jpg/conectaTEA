@@ -112,6 +112,10 @@ Se as variáveis do Supabase **não** estiverem definidas, o app inicia automati
   (via `BroadcastChannel`). O código de vinculação de cada dependente aparece em
   **Meu dia → Meu código de vinculação**; digite-o em **Dependentes → Vincular dependente** na
   conta do responsável para criar o vínculo.
+- **O código de vinculação só funciona no mesmo navegador.** O modo demonstração não tem banco
+  compartilhado, então contas criadas em celulares, computadores ou navegadores diferentes não se
+  enxergam. Para vincular de verdade entre aparelhos, configure o Supabase (veja
+  [Configuração com Supabase](#️-configuração-com-supabase)).
 - O lembrete de tarefa no horário programado é gerado pelo próprio app aberto (o modo
   demonstração não tem banco). Com o Supabase configurado, o lembrete é gerado pelo banco mesmo
   com o app fechado.
@@ -175,6 +179,17 @@ DevTools → Application → Service Workers → **Unregister** e apague os cach
 > No GitHub Pages, o app fica em `/conectaTEA/`; o manifesto, os ícones e o service worker usam
 > esse caminho automaticamente. O cache do service worker só limpa entradas com o prefixo
 > `conectatea-`, sem afetar outros projetos publicados na mesma origem.
+
+### Se o app instalado não abrir
+
+Se aparecer **“não foi possível abrir o aplicativo”** ao tocar no ícone:
+
+1. Apague o ícone antigo do ConectaTEA (desinstale o app).
+2. Abra `https://mariaeduardabg30-jpg.github.io/conectaTEA/` no Chrome/Safari.
+3. Instale de novo pelo botão **Instalar app** (no topo do site) ou pelo menu do navegador.
+
+Instalações antigas apontavam para `conecatea.com`, domínio que não existe mais; por isso o ícone
+salvo antes da mudança não consegue abrir. Reinstalar pelo endereço atual corrige.
 
 ---
 

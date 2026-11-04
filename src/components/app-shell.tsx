@@ -20,6 +20,7 @@ import { AlertListener, AlertSoundToggle } from "@/components/alert-listener";
 import { Brand, LogoMark } from "@/components/brand";
 import { DependentSwitcher } from "@/components/dependent-switcher";
 import { HelpButton } from "@/components/help-button";
+import { InstallApp } from "@/components/install-app";
 import { NotificationBell } from "@/components/notification-bell";
 import { EmptyState, LoadingBlock } from "@/components/ui/page-header";
 import { useApp } from "@/lib/data/provider";
@@ -147,6 +148,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="space-y-2 px-4 pb-4">
+          <InstallApp className="flex w-full items-center gap-2.5 rounded-2xl px-3 py-2.5 text-xs font-bold text-ink-soft transition hover:bg-surface-2" />
           {mode === "demo" && (
             <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2 px-3.5 py-2.5">
               <p className="text-xs font-extrabold text-accent">Modo demonstração</p>
@@ -222,6 +224,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <NotificationBell />
                 </>
               )}
+              <InstallApp compact className="icon-button" />
               <button
                 type="button"
                 onClick={logout}
