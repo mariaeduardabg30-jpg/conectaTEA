@@ -115,6 +115,54 @@ npm run lint    # análise estática (ESLint)
 
 ---
 
+## 📱 PWA (instalável e offline)
+
+O ConectaTEA é uma **Progressive Web App**: pode ser instalado na tela inicial do celular, no
+computador ou aberto como um app, sem loja de aplicativos.
+
+- **Instalar no Android/Chrome:** abra o site e toque em **⋮ → Instalar app** (ou no aviso
+  “Adicionar à tela inicial”).
+- **Instalar no iPhone/iPad (Safari):** toque em **Compartilhar → Adicionar à Tela de Início**.
+- **Instalar no computador (Chrome/Edge):** clique no ícone de instalação na barra de endereço.
+
+### O que funciona offline
+
+- A **tela de abertura da última página visitada** abre pelo cache.
+- Rotas ainda não visitadas mostram a página **“Você está sem conexão”**, com botão para tentar
+  novamente.
+- Ícones, logo e arquivos estáticos ficam em cache para o app abrir rápido.
+- **Os dados** (rotina, emoções, ajuda) continuam precisando de internet, porque ficam no Supabase
+  ou são sincronizados entre abas. Nenhum dado é apagado quando a conexão cai.
+
+### Arquivos e funcionamento
+
+| Arquivo | Função |
+| --- | --- |
+| `public/manifest.json` | Nome, cores, ícones, atalhos e modo `standalone`. |
+| `public/sw.js` | Service worker: cache das páginas, arquivos estáticos e fallback offline. |
+| `public/offline.html` | Tela exibida quando não há conexão nem cache da rota. |
+| `public/icons/` | Ícones 192/512, maskable e Apple Touch. |
+| `src/components/service-worker-register.tsx` | Registra o service worker respeitando o `basePath`. |
+
+O service worker é registrado **apenas no build de produção** (não no `npm run dev`), para evitar
+cache de arquivos antigos durante o desenvolvimento. Para testar:
+
+```bash
+npm run build
+npm run start
+```
+
+Depois abra `http://localhost:3000`, navegue por algumas telas, desligue a internet (ou use
+DevTools → Network → Offline) e recarregue. Para limpar o cache durante testes, use
+DevTools → Application → Service Workers → **Unregister** e apague os caches
+`conectatea-*`.
+
+> No GitHub Pages, o app fica em `/conectaTEA/`; o manifesto, os ícones e o service worker usam
+> esse caminho automaticamente. O cache do service worker só limpa entradas com o prefixo
+> `conectatea-`, sem afetar outros projetos publicados na mesma origem.
+
+---
+
 ## 🗄️ Configuração com Supabase
 
 1. Crie um projeto em [supabase.com](https://supabase.com/).
@@ -239,6 +287,12 @@ src/
 │  ├─ hooks/                 # hooks reutilizáveis
 │  ├─ date.ts, emotions.ts   # utilitários de datas e emoções
 │  └─ types.ts               # tipos compartilhados
+public/
+├─ manifest.json             # manifesto PWA
+├─ sw.js                     # service worker (cache e offline)
+├─ offline.html              # tela sem conexão
+├─ icons/                    # ícones do app instalado
+└─ mascote.jpeg              # logo/mascote
 supabase/
 ├─ schema.sql                # schema completo do banco (v2, com papéis)
 ├─ check_setup.sql           # verificação somente leitura da estrutura
@@ -271,6 +325,9 @@ Os componentes consomem apenas o contexto `AppProvider`, sem saber qual adaptado
   sem suporte a Web Audio ou com áudio bloqueado) podem exigir uma interação inicial.
 - **Notificações fora da aba:** o alerta do responsável funciona com a aba aberta. Notificações
   push em segundo plano estão fora do escopo atual.
+- **Offline:** a interface instalada abre pelo cache, mas o carregamento de rotina, emoções e
+  pedidos de ajuda depende de conexão com o Supabase. As telas visitadas continuam acessíveis e a
+  página “Sem conexão” orienta a tentar novamente.
 
 ---
 

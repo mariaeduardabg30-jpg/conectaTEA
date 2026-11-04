@@ -1,0 +1,70 @@
+{
+  "id": "./",
+  "name": "ConectaTEA — autonomia, rotina e conexão",
+  "short_name": "ConectaTEA",
+  "description": "Plataforma de apoio à autonomia de pessoas com TEA: rotina visual, sons relaxantes, registro de emoções e pedidos de ajuda conectados ao responsável.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#f6f1e6",
+  "theme_color": "#f6f1e6",
+  "categories": ["education", "health", "lifestyle"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Meu dia",
+      "short_name": "Meu dia",
+      "description": "Abrir a área do dependente",
+      "url": "./dependente/",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Visão geral",
+      "short_name": "Visão geral",
+      "description": "Abrir a área do responsável",
+      "url": "./responsavel/",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}
