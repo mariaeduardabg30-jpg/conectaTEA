@@ -223,6 +223,8 @@ salvo antes da mudança não consegue abrir. Reinstalar pelo endereço atual cor
 
 6. Reinicie o servidor de desenvolvimento.
 
+> No deploy do GitHub Pages, os valores de produção ficam em `.env.production` (versionado).
+
 Com as variáveis definidas, o app passa a usar o Supabase automaticamente. O nome, o papel
 (`responsavel` ou `dependente`) e a idade são enviados no cadastro via `user_metadata`; o gatilho
 `handle_new_user` cria o perfil e, no caso do dependente, o espaço dele no banco.
@@ -353,15 +355,13 @@ Antes do primeiro deploy, no GitHub:
 1. Em **Settings → Pages → Build and deployment → Source**, escolha **GitHub Actions**.
 2. Ainda em **Settings → Pages → Custom domain**, remova `conecatea.com` se ele aparecer ali.
    O domínio não está registrado e o redirecionamento para ele impede o site de abrir.
-3. Em **Settings → Secrets and variables → Actions → Variables**, crie (opcional, para usar o
-   Supabase em produção):
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (se quiser notificações push; veja “Notificações”)
-
-   Sem elas o site publicado abre em modo demonstração.
-4. Rode o workflow **Deploy no GitHub Pages** (Actions → Run workflow) ou faça um push na `main`.
-5. No Supabase, adicione a URL publicada em **Authentication → URL Configuration → Redirect URLs**,
+3. As chaves do Supabase ficam no arquivo [`.env.production`](./.env.production) versionado neste
+   repositório. A chave **anon** é pública por design; a proteção dos dados vem das políticas RLS.
+   Nunca coloque a chave `service_role` no repositório. Para trocar de projeto, edite esse arquivo.
+4. Se quiser notificações push, crie a Variable `NEXT_PUBLIC_VAPID_PUBLIC_KEY` em
+   **Settings → Secrets and variables → Actions → Variables** (veja “Notificações”).
+5. Rode o workflow **Deploy no GitHub Pages** (Actions → Run workflow) ou faça um push na `main`.
+6. No Supabase, adicione a URL publicada em **Authentication → URL Configuration → Redirect URLs**,
    incluindo o caminho `/redefinir-senha`.
 
 > **Por que o site não abria:** o arquivo `CNAME` apontava para `conecatea.com`, mas esse domínio

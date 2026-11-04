@@ -39,11 +39,8 @@ jobs:
         env:
           GITHUB_PAGES: "true"
           PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
-          # Configure como "Variables" do repositório (Settings → Secrets and
-          # variables → Actions → Variables). Sem elas o site abre em modo
-          # demonstração, com dados salvos no navegador.
-          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          # As chaves do Supabase ficam em .env.production, versionado neste
+          # repositório (a chave anon é pública; a proteção vem do RLS).
           # Opcional: habilita o botão "Ativar notificações" push no app.
           NEXT_PUBLIC_VAPID_PUBLIC_KEY: ${{ vars.NEXT_PUBLIC_VAPID_PUBLIC_KEY }}
 
