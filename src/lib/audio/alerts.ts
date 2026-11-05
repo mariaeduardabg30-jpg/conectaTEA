@@ -88,6 +88,23 @@ export async function playNotificationTone(): Promise<void> {
   note(context, 1174.66, now + 0.22, 0.36, 0.1, "triangle");
 }
 
+/** Lembrete de tarefa: tom mais forte, para chamar a atenção sem alarmar. */
+export async function playReminderTone(): Promise<void> {
+  const context = getContext();
+  if (!context) return;
+  if (context.state === "suspended") {
+    try {
+      await context.resume();
+    } catch {
+      return;
+    }
+  }
+  const now = context.currentTime + 0.02;
+  note(context, 440, now, 0.3, 0.2, "sine");
+  note(context, 660, now + 0.12, 0.3, 0.2, "sine");
+  note(context, 880, now + 0.24, 0.4, 0.2, "triangle");
+}
+
 /** Som curto de confirmação para ações do dependente. */
 export async function playConfirmationTone(): Promise<void> {
   const context = getContext();

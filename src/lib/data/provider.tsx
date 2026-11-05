@@ -14,7 +14,7 @@ import { createDemoBackend } from "@/lib/data/demo";
 import { createSupabaseBackend } from "@/lib/data/supabase";
 import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
-import { playHelpAlert, playNotificationTone } from "@/lib/audio/alerts";
+import { playHelpAlert, playNotificationTone, playReminderTone } from "@/lib/audio/alerts";
 import type {
   AppNotification,
   AppRole,
@@ -214,6 +214,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // desbloqueio de áudio garante que o som toque mesmo com a aba em segundo
         // plano (o Notification também é exibido pelo navegador).
         void playHelpAlert();
+      } else if (notification.type === "task_reminder") {
+        // Lembrete de atividade: tom mais forte para chamar a atenção do
+        // responsável sem transformar o pedido em alarme.
+        void playReminderTone();
       } else {
         void playNotificationTone();
       }
