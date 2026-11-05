@@ -39,10 +39,10 @@ jobs:
         env:
           GITHUB_PAGES: "true"
           PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
-          # As chaves do Supabase ficam em .env.production, versionado neste
-          # repositório (a chave anon é pública; a proteção vem do RLS).
-          # Opcional: habilita o botão "Ativar notificações" push no app.
-          NEXT_PUBLIC_VAPID_PUBLIC_KEY: ${{ vars.NEXT_PUBLIC_VAPID_PUBLIC_KEY }}
+          # A chave anon é pública; a proteção dos dados vem das políticas RLS.
+          # A chave VAPID pública fica versionada no .env.production e também no
+          # repositório; o fallback garante que o build de produção sempre tenha.
+          NEXT_PUBLIC_VAPID_PUBLIC_KEY: ${{ vars.NEXT_PUBLIC_VAPID_PUBLIC_KEY || 'BEU4uQ_a-0uZaHsQRlX9fCVsrJvQ2LB1C-AqfxoOnS4zaqY3ouyPH0CXU7uup4e-wtlEugxIcDL7fSnK8Ve9fh0' }}
 
       - name: Enviar artefato do site
         uses: actions/upload-pages-artifact@v3
