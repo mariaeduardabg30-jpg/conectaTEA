@@ -312,8 +312,10 @@ aviso chega até com o app fechado:
 5. No build do site, defina `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (a chave **pública** gerada no passo 1)
    — na Vercel/Node como variável de ambiente; no GitHub Pages, em
    **Settings → Secrets and variables → Actions → Variables**.
-6. No app, toque no sino → **Ativar notificações**. Vale para as duas contas: o responsável recebe
-   pedidos de ajuda e novidades da rotina; o dependente recebe os lembretes das próprias
+6. No app, o aviso global de **Notificações no aparelho** aparece no topo (ou toque no sino →
+   **Ativar notificações**). Ele pergunta a permissão para notificações neste dispositivo e,
+   quando o push está configurado, já cria a inscrição. Vale para as duas contas: o responsável
+   recebe pedidos de ajuda e novidades da rotina; o dependente recebe os lembretes das próprias
    atividades. Cada dispositivo da família faz a inscrição uma vez; as inscrições ficam em
    `push_subscriptions` (o próprio titular gerencia os dispositivos dele).
 

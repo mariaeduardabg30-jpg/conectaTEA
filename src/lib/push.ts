@@ -9,6 +9,15 @@ export type PushState =
   | "inactive"
   | "subscribed";
 
+export type NotificationPermissionState =
+  | "unsupported"
+  | "default"
+  | "granted"
+  | "denied";
+
+/** Evento disparado quando a permissão de notificações muda neste dispositivo. */
+export const NOTIFICATION_PERMISSION_EVENT = "conectatea:notification-permission";
+
 /** Chave pública VAPID publicada pelo build (NEXT_PUBLIC_VAPID_PUBLIC_KEY). */
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? "";
 
@@ -19,6 +28,45 @@ export function pushSupported(): boolean {
     "PushManager" in window &&
     "Notification" in window
   );
+}
+
+/** Notificações do navegador existem neste dispositivo (mesmo sem push). */
+export function notificationsSupported(): boolean {
+  if (typeof window === "undefined") return false;
+  return "Notification" in window;
+}
+
+/** Permissão atual para mostrar notificações neste dispositivo. */
+export function getNotificationPermission(): NotificationPermissionState {
+  if (!notificationsSupported()) return "unsupported";
+  if (Notification.permission === "granted") return "granted";
+  if (Notification.permission === "denied") return "denied";
+  return "default";
+}
+
+function emitPermissionChange() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(NOTIFICATION_PERMISSION_EVENT));
+}
+
+/**
+ * Pede a permissão de notificações ao usuário. Deve ser chamada a partir de um
+ * clique/toque, pois alguns navegadores exigem um gesto do usuário.
+ */
+export async function requestNotificationPermission(): Promise<NotificationPermissionState> {
+  const current = getNotificationPermission();
+  if (current !== "default") return current;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") return "granted";
+    if (permission === "denied") return "denied";
+    return "default";
+  } catch (cause) {
+    console.error("Falha ao pedir permissão de notificações", cause);
+    return getNotificationPermission();
+  } finally {
+    emitPermissionChange();
+  }
 }
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -59,17 +107,18 @@ export async function getPushState(): Promise<PushState> {
 /** Pede permissão, inscreve o dispositivo e salva a inscrição no banco. */
 export async function enablePushNotifications(): Promise<PushState> {
   if (!pushSupported()) return "unsupported";
+
+  // A permissão do aparelho é pedida mesmo quando o push ainda não está
+  // configurado; assim os avisos locais já funcionam enquanto o restante é
+  // ativado pelo responsável.
+  const permission = await requestNotificationPermission();
+  if (permission !== "granted") return "inactive";
+
   if (!isSupabaseConfigured) return "demo";
   if (!VAPID_PUBLIC_KEY) return "missing-key";
 
   const client = getSupabase();
   if (!client) return "demo";
-
-  const permission =
-    Notification.permission === "granted"
-      ? "granted"
-      : await Notification.requestPermission();
-  if (permission !== "granted") return "inactive";
 
   const registration = await getRegistration();
   if (!registration) return "inactive";

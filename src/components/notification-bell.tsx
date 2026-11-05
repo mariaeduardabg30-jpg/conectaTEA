@@ -19,8 +19,13 @@ import {
   disablePushNotifications,
   enablePushNotifications,
   getPushState,
+  requestNotificationPermission,
   type PushState,
 } from "@/lib/push";
+import {
+  useNotificationPermission,
+  type NotificationPermissionView,
+} from "@/lib/hooks/use-notification-permission";
 import { formatRelative } from "@/lib/date";
 import type { AppNotification, NotificationType } from "@/lib/types";
 
@@ -74,6 +79,7 @@ export function NotificationBell() {
   } = useApp();
   const [open, setOpen] = useState(false);
   const [pushState, setPushState] = useState<PushState | "loading">("loading");
+  const permission = useNotificationPermission();
   const [pushBusy, setPushBusy] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -124,6 +130,8 @@ export function NotificationBell() {
   const activatePush = async () => {
     setPushBusy(true);
     try {
+      // Primeiro a permissão do aparelho; depois a inscrição push, se possível.
+      await requestNotificationPermission();
       setPushState(await enablePushNotifications());
     } finally {
       setPushBusy(false);
@@ -160,7 +168,11 @@ export function NotificationBell() {
             ? `Notificações (${unread} não lida${unread > 1 ? "s" : ""})`
             : "Notificações"
         }
-        title="Notificações"
+        title={
+          permission === "default"
+            ? "Notificações — permissão pendente neste aparelho"
+            : "Notificações"
+        }
       >
         <Bell className="size-5" aria-hidden />
         {unread > 0 && (
@@ -271,6 +283,7 @@ export function NotificationBell() {
 
           <div className="border-t border-line/80 bg-surface-2/50 px-4 py-3">
             <PushRow
+              permission={permission}
               state={pushState}
               busy={pushBusy}
               onActivate={() => void activatePush()}
@@ -294,16 +307,53 @@ export function NotificationBell() {
 }
 
 function PushRow({
+  permission,
   state,
   busy,
   onActivate,
   onDeactivate,
 }: {
+  permission: NotificationPermissionView;
   state: PushState | "loading";
   busy: boolean;
   onActivate: () => void;
   onDeactivate: () => void;
 }) {
+  if (permission === "loading") {
+    return <p className="text-[0.68rem] font-bold text-muted">Verificando notificações…</p>;
+  }
+  if (permission === "unsupported") {
+    return (
+      <p className="text-[0.68rem] leading-snug text-muted">
+        Este navegador não suporta notificações.
+      </p>
+    );
+  }
+  if (permission === "denied") {
+    return (
+      <p className="text-[0.68rem] leading-snug text-ink-soft">
+        Notificações bloqueadas neste dispositivo. Libere nas permissões do site
+        (ícone de cadeado ao lado do endereço) e recarregue a página.
+      </p>
+    );
+  }
+  if (permission === "default") {
+    return (
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[0.68rem] leading-snug text-ink-soft">
+          Permita avisos neste aparelho para receber lembretes e pedidos de ajuda.
+        </p>
+        <button
+          type="button"
+          onClick={onActivate}
+          disabled={busy}
+          className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3 text-[0.68rem] font-extrabold text-white transition hover:bg-primary-strong disabled:opacity-60"
+        >
+          {busy ? "Ativando…" : "Permitir notificações"}
+        </button>
+      </div>
+    );
+  }
   if (state === "loading") {
     return <p className="text-[0.68rem] font-bold text-muted">Verificando notificações push…</p>;
   }
@@ -312,7 +362,7 @@ function PushRow({
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 text-[0.68rem] font-extrabold text-primary-strong">
           <Check className="size-3.5" strokeWidth={3} aria-hidden />
-          Notificações push ativadas neste dispositivo
+          Notificações ativadas neste dispositivo
         </p>
         <button
           type="button"
@@ -325,27 +375,42 @@ function PushRow({
       </div>
     );
   }
-  if (state === "inactive") {
+  if (state === "missing-key") {
     return (
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[0.68rem] leading-snug text-ink-soft">
-          Receba avisos mesmo com o app fechado.
-        </p>
-        <button
-          type="button"
-          onClick={onActivate}
-          disabled={busy}
-          className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3 text-[0.68rem] font-extrabold text-white transition hover:bg-primary-strong disabled:opacity-60"
-        >
-          {busy ? "Ativando…" : "Ativar notificações"}
-        </button>
-      </div>
+      <p className="text-[0.68rem] leading-snug text-ink-soft">
+        Permissão concedida. Falta configurar o push no build para avisar com o
+        app fechado.
+      </p>
     );
   }
-  const hint: Record<Exclude<PushState, "subscribed" | "inactive">, string> = {
-    demo: "Notificações push funcionam com o Supabase configurado (veja o README).",
-    "missing-key": "A chave pública VAPID ainda não foi configurada no build.",
-    unsupported: "Este navegador não suporta notificações push.",
-  };
-  return <p className="text-[0.68rem] leading-snug text-muted">{hint[state]}</p>;
+  if (state === "demo") {
+    return (
+      <p className="text-[0.68rem] leading-snug text-ink-soft">
+        Permissão concedida. No modo demonstração, os avisos aparecem com o app
+        aberto.
+      </p>
+    );
+  }
+  if (state === "unsupported") {
+    return (
+      <p className="text-[0.68rem] leading-snug text-ink-soft">
+        Permissão concedida. Este navegador não suporta avisos com o app fechado.
+      </p>
+    );
+  }
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-[0.68rem] leading-snug text-ink-soft">
+        Receba avisos mesmo com o app fechado.
+      </p>
+      <button
+        type="button"
+        onClick={onActivate}
+        disabled={busy}
+        className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3 text-[0.68rem] font-extrabold text-white transition hover:bg-primary-strong disabled:opacity-60"
+      >
+        {busy ? "Ativando…" : "Ativar push"}
+      </button>
+    </div>
+  );
 }

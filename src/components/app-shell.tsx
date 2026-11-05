@@ -24,6 +24,7 @@ import { HelpButton } from "@/components/help-button";
 import { InstallApp } from "@/components/install-app";
 import { LiveClock } from "@/components/live-clock";
 import { NotificationBell } from "@/components/notification-bell";
+import { NotificationPermissionPrompt } from "@/components/notification-permission-prompt";
 import { TaskReminderBanner } from "@/components/task-reminder-banner";
 import { EmptyState, LoadingBlock } from "@/components/ui/page-header";
 import { useApp } from "@/lib/data/provider";
@@ -243,6 +244,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         >
           {area === "dependente" && <HelpAcknowledgedBanner />}
           <TaskReminderBanner area={area} />
+          <NotificationPermissionPrompt />
           {area === "dependente" && !activeDependent ? (
             dependentsLoaded ? (
               <div className="card mx-auto max-w-2xl p-6 sm:p-10">
