@@ -49,6 +49,12 @@ jobs:
         with:
           path: out
 
+      - name: Deployar Edge Function send-push
+        run: npx supabase functions deploy send-push --no-verify-jwt
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        continue-on-error: true
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
