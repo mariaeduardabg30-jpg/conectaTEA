@@ -14,7 +14,7 @@ import { createDemoBackend } from "@/lib/data/demo";
 import { createSupabaseBackend } from "@/lib/data/supabase";
 import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
-import { playNotificationTone } from "@/lib/audio/alerts";
+import { playHelpAlert, playNotificationTone } from "@/lib/audio/alerts";
 import type {
   AppNotification,
   AppRole,
@@ -209,7 +209,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (current.some((item) => item.id === notification.id)) return current;
         return [notification, ...current];
       });
-      if (notification.type !== "help_request") void playNotificationTone();
+      if (notification.type === "help_request") {
+        // Pedidos de ajuda pedem um alerta acolhedor e alto. O gesto global de
+        // desbloqueio de áudio garante que o som toque mesmo com a aba em segundo
+        // plano (o Notification também é exibido pelo navegador).
+        void playHelpAlert();
+      } else {
+        void playNotificationTone();
+      }
       browserNotify(notification, user.role);
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate(notification.type === "help_request" ? [120, 80, 120] : 60);
