@@ -55,7 +55,8 @@ const TYPE_META: Record<
   },
 };
 
-function targetFor(type: NotificationType): string {
+function targetFor(type: NotificationType, isResponsible: boolean): string {
+  if (!isResponsible) return "/dependente";
   return type === "help_request" || type === "help_acknowledged"
     ? "/responsavel/ajuda"
     : "/responsavel/rotina";
@@ -116,7 +117,8 @@ export function NotificationBell() {
 
   const items = useMemo(() => notifications.slice(0, 30), [notifications]);
 
-  // Notificações push: só para quem pode receber (responsável).
+  // Notificações push: qualquer conta pode receber (o dependente recebe os
+  // lembretes das próprias tarefas; o responsável, o que acontece na rotina).
   const isResponsible = user?.role === "responsavel";
 
   const activatePush = async () => {
@@ -140,7 +142,7 @@ export function NotificationBell() {
   const openItem = (notification: AppNotification) => {
     if (!notification.readAt) void markNotificationRead(notification.id);
     setOpen(false);
-    router.push(targetFor(notification.type));
+    router.push(targetFor(notification.type, isResponsible));
   };
 
   const unread = unreadNotifications;
@@ -268,22 +270,22 @@ export function NotificationBell() {
           </div>
 
           <div className="border-t border-line/80 bg-surface-2/50 px-4 py-3">
+            <PushRow
+              state={pushState}
+              busy={pushBusy}
+              onActivate={() => void activatePush()}
+              onDeactivate={() => void deactivatePush()}
+            />
             {isResponsible && (
-              <PushRow
-                state={pushState}
-                busy={pushBusy}
-                onActivate={() => void activatePush()}
-                onDeactivate={() => void deactivatePush()}
-              />
+              <Link
+                href="/responsavel/ajuda"
+                onClick={() => setOpen(false)}
+                className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl py-2 text-xs font-extrabold text-primary transition hover:bg-primary-soft/60"
+              >
+                <LifeBuoy className="size-4" aria-hidden />
+                Ver todos os pedidos de ajuda
+              </Link>
             )}
-            <Link
-              href="/responsavel/ajuda"
-              onClick={() => setOpen(false)}
-              className="mt-2 flex items-center justify-center gap-1.5 rounded-2xl py-2 text-xs font-extrabold text-primary transition hover:bg-primary-soft/60"
-            >
-              <LifeBuoy className="size-4" aria-hidden />
-              Ver todos os pedidos de ajuda
-            </Link>
           </div>
         </div>
       )}

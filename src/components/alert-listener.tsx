@@ -83,9 +83,24 @@ export function AlertListener() {
 
   useEffect(() => {
     if (!latestHelp) return;
-    if (soundEnabledRef.current) void playHelpAlert();
+    let plays = 0;
+    const fire = () => {
+      if (!soundEnabledRef.current) return;
+      if (plays >= 4) return;
+      plays += 1;
+      void playHelpAlert();
+      // Vibração ajuda quem está com o celular no bolso (quando suportado).
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        navigator.vibrate([300, 150, 300, 150, 600]);
+      }
+    };
+    fire();
+    const interval = window.setInterval(fire, 6000);
     const timer = window.setTimeout(() => dismissHelpAlert(), 30000);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(timer);
+    };
   }, [latestHelp, dismissHelpAlert]);
 
   const offerHelp = async () => {

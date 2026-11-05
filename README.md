@@ -21,8 +21,9 @@ vinculação** exibido na conta do dependente, que o responsável digita em **�
 
 ### Área do dependente
 
-- **Minha rotina** — atividades com horário, duração e dias da semana; marcação de concluído com
-  um toque; visão do dia e progresso semanal.
+- **Minha rotina** — atividades com horário, duração e dias da semana; cada atividade só pode ser
+  concluída a partir do horário definido (com contagem regressiva e liberação automática), usando o
+  relógio do próprio dispositivo; visão do dia e progresso semanal.
 - **Meu código de vinculação** — código único de 8 caracteres, gerado automaticamente no cadastro,
   com botão para copiar e opção de gerar um novo (o anterior deixa de funcionar). É o que
   conecta a conta do dependente à do responsável.
@@ -270,12 +271,22 @@ Para conferir se o schema foi aplicado corretamente, rode
 Quando o dependente **cria/programa uma tarefa**, **conclui uma tarefa** ou **pede ajuda**, o
 banco insere uma linha em `notifications` para cada responsável vinculado daquele dependente, com
 deduplicação por (destinatário, tipo, tarefa, data) — não há alertas repetidos para o mesmo evento.
-Além disso, `run_task_reminders()` é executada a cada minuto pelo **pg_cron** e cria o lembrete no
-horário programado (fuso `America/Sao_Paulo`), **mesmo com o app fechado**.
+Além disso, `run_task_reminders()` é executada a cada minuto pelo **pg_cron** e cria o lembrete
+**para o dependente e para o responsável**, nomeando a atividade, **mesmo com o app fechado**. A
+janela do lembrete começa 5 minutos antes do horário e termina 2 minutos depois, para não perder o
+aviso de uma tarefa criada em cima da hora.
 
-No app, o sino no topo mostra as não lidas, toca um tom suave (quando o app está aberto) e, com a
-permissão de notificações concedida, também dispara um aviso do navegador quando a aba está em
-segundo plano. Com o **Web Push** ativado, o aviso chega até com o app fechado:
+O fuso usado é o do dispositivo de cada conta: no login, o app grava
+`Intl.DateTimeFormat().resolvedOptions().timeZone` em `profiles.timezone`, e o banco converte
+`now()` para esse fuso antes de comparar com o horário da atividade. Assim o alarme não depende do
+fuso do servidor. A conclusão de cada atividade também usa o relógio local do aparelho: o botão
+fica bloqueado com a contagem “Libera em X min” e é liberado sozinho no horário, sem recarregar.
+
+No app, o sino no topo mostra as não lidas (para os dois papéis), toca um tom suave (quando o app
+está aberto), o relógio do dispositivo fica visível no cabeçalho e um aviso de **Hora da tarefa**
+aparece em qualquer página até ser dispensado. Com a permissão de notificações concedida, também
+dispara um aviso do navegador quando a aba está em segundo plano. Com o **Web Push** ativado, o
+aviso chega até com o app fechado:
 
 1. Gere um par de chaves VAPID:
 
@@ -301,9 +312,10 @@ segundo plano. Com o **Web Push** ativado, o aviso chega até com o app fechado:
 5. No build do site, defina `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (a chave **pública** gerada no passo 1)
    — na Vercel/Node como variável de ambiente; no GitHub Pages, em
    **Settings → Secrets and variables → Actions → Variables**.
-6. No app do responsável, toque no sino → **Ativar notificações**. Cada dispositivo da família
-   faz a inscrição uma vez; as inscrições ficam em `push_subscriptions` (o próprio titular
-   gerencia os dispositivos dele).
+6. No app, toque no sino → **Ativar notificações**. Vale para as duas contas: o responsável recebe
+   pedidos de ajuda e novidades da rotina; o dependente recebe os lembretes das próprias
+   atividades. Cada dispositivo da família faz a inscrição uma vez; as inscrições ficam em
+   `push_subscriptions` (o próprio titular gerencia os dispositivos dele).
 
 Se a push não for configurada, tudo funciona normalmente com o app aberto (sino, som e alertas);
 apenas o envio com o app fechado deixa de existir.
@@ -317,7 +329,7 @@ A segurança é garantida por **Row Level Security (RLS)**:
   regra. O nome antigo `is_owner_of_dependent(uuid)` continua existindo como alias.
 - `notifications`: cada conta lê apenas as próprias notificações e só pode alterar a coluna
   `read_at`. Inserir/apagar é inacessível pelo cliente — só o banco cria notificações, sempre para
-  os responsáveis vinculados ao dependente do evento.
+  o destinatário do evento (responsável e/ou a própria conta do dependente).
 - `push_subscriptions`: cada conta gerencia apenas as próprias inscrições.
 
 O vínculo entre o perfil criado pelo responsável e a conta do dependente pode ser feito pelo
@@ -441,7 +453,11 @@ Os componentes consomem apenas o contexto `AppProvider`, sem saber qual adaptado
   eles, os avisos funcionam apenas com o app aberto. Em iPhone/iPad, push exige o app instalado
   na tela de início (iOS 16.4+).
 - **Sons:** são gerados em tempo real pelo navegador; alguns ambientes (por exemplo, navegadores
-  sem suporte a Web Audio ou com áudio bloqueado) podem exigir uma interação inicial.
+  sem suporte a Web Audio ou com áudio bloqueado) podem exigir uma interação inicial. O alerta de
+  ajuda toca em sequência e se repete por até 30 segundos (ou até ser acolhido/dispensado) enquanto
+  o app está aberto. Com o app fechado, quem toca o som é o sistema operacional, conforme as
+  permissões e o modo silencioso do aparelho — em iPhone/iPad o push exige o app instalado na tela
+  de início e o som pode ser suprimido pelo sistema.
 
 - **Offline:** a interface instalada abre pelo cache, mas o carregamento de rotina, emoções e
   pedidos de ajuda depende de conexão com o Supabase. As telas visitadas continuam acessíveis e a

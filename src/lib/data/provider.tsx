@@ -25,18 +25,36 @@ import type {
 
 const ACTIVE_DEPENDENT_KEY = "conectatea.active-dependent";
 
-function browserNotify(notification: AppNotification) {
+/** Destino ao tocar no aviso do navegador, conforme o tipo e o papel da conta. */
+function notificationPath(notification: AppNotification, role: AppRole): string {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  if (notification.type === "help_request") return `${basePath}/responsavel/ajuda`;
+  if (role === "dependente") return `${basePath}/dependente`;
+  return notification.type === "help_acknowledged"
+    ? `${basePath}/responsavel/ajuda`
+    : `${basePath}/responsavel/rotina`;
+}
+
+function browserNotify(notification: AppNotification, role: AppRole) {
   if (typeof window === "undefined" || typeof Notification === "undefined") return;
   if (Notification.permission !== "granted") return;
   // Com a aba visível, a interface já mostra o alerta.
   if (!document.hidden) return;
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  const isHelp = notification.type === "help_request";
   try {
-    new Notification(notification.title, {
+    const shown = new Notification(notification.title, {
       body: notification.body,
       icon: `${basePath}/icons/icon-192.png`,
       tag: notification.id,
+      requireInteraction: isHelp,
+      silent: false,
     });
+    shown.onclick = () => {
+      window.focus();
+      shown.close();
+      window.location.assign(notificationPath(notification, role));
+    };
   } catch {
     // Alguns navegadores não implementam o construtor sem service worker.
   }
@@ -192,7 +210,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return [notification, ...current];
       });
       if (notification.type !== "help_request") void playNotificationTone();
-      browserNotify(notification);
+      browserNotify(notification, user.role);
       if (typeof navigator !== "undefined" && navigator.vibrate) {
         navigator.vibrate(notification.type === "help_request" ? [120, 80, 120] : 60);
       }
@@ -201,11 +219,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, [backend, user]);
 
-  // No modo demonstração quem gera o lembrete de tarefa é o próprio app
-  // (com o app aberto). Em produção, o banco executa o lembrete com o app
-  // fechado, via função agendada.
+  // O lembrete é gerado pelo banco (pg_cron) e reforçado pelo app aberto,
+  // inclusive para a conta do dependente. Assim ele chega mesmo quando a
+  // pessoa está em outra página do app e não depende de recarregar a tela.
   useEffect(() => {
-    if (!user || user.role !== "responsavel") return;
+    if (!user) return;
     const check = backend.checkTaskReminders;
     if (!check) return;
     const tick = () => {
@@ -213,11 +231,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // No máximo uma checagem por minuto.
       if (now - remindersCheckedAtRef.current < 45_000) return;
       remindersCheckedAtRef.current = now;
-      void check().catch(() => undefined);
+      void check()
+        .then(() => loadNotifications())
+        .catch(() => undefined);
     };
     const interval = window.setInterval(tick, 20_000);
     tick();
     return () => window.clearInterval(interval);
+  }, [backend, user, loadNotifications]);
+
+  // Se o app abriu depois do pedido de ajuda (ou o Realtime perdeu o evento),
+  // ainda mostra o alerta sonoro para pedidos recentes e não acolhidos.
+  useEffect(() => {
+    if (!user || user.role !== "responsavel") return;
+    let cancelled = false;
+    void backend
+      .listHelpRequests()
+      .then((requests) => {
+        if (cancelled) return;
+        const recent = requests.find((request) => {
+          if (request.acknowledgedAt) return false;
+          const age = Date.now() - new Date(request.createdAt).getTime();
+          return age >= 0 && age <= 15 * 60_000;
+        });
+        if (recent) {
+          setLatestHelp((current) => current ?? recent);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [backend, user]);
 
   useEffect(() => {

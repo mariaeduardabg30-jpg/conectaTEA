@@ -116,6 +116,36 @@ export function minutesFromTime(value: string): number {
   return (hours ?? 0) * 60 + (minutes ?? 0);
 }
 
+/**
+ * Junta a data local (ano/mês/dia do dispositivo) com um horário "HH:MM".
+ * Usa o construtor local de Date de propósito: `new Date("2026-11-04T08:00")`
+ * seria interpretado como horário local em alguns navegadores e UTC em
+ * outros, causando diferença de fuso.
+ */
+export function combineDateAndTime(date: Date, time: string): Date {
+  const minutes = minutesFromTime(time);
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    Math.floor(minutes / 60),
+    minutes % 60,
+    0,
+    0,
+  );
+}
+
+/** Uma atividade só pode ser concluída a partir do horário local definido. */
+export function isRoutineAvailable(startTime: string, now: Date): boolean {
+  return now.getTime() >= combineDateAndTime(now, startTime).getTime();
+}
+
+/** Minutos inteiros restantes até o horário (0 quando já chegou). */
+export function minutesUntilTime(startTime: string, now: Date): number {
+  const diff = combineDateAndTime(now, startTime).getTime() - now.getTime();
+  return diff <= 0 ? 0 : Math.ceil(diff / 60_000);
+}
+
 export function weekdayName(day: number): string {
   return WEEKDAY_LONG[day] ?? "";
 }

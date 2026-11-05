@@ -204,6 +204,34 @@ export function createSupabaseBackend(): Backend {
     return user.id;
   }
 
+  /**
+   * Guarda no perfil o fuso do dispositivo. O banco usa esse valor para
+   * disparar o lembrete no horário local correto, inclusive com o app fechado.
+   * Falhas são silenciosas: o lembrete cai no fuso padrão até a atualização.
+   */
+  let lastTimezoneSync = "";
+  async function syncTimeZone(userId: string): Promise<void> {
+    if (typeof window === "undefined") return;
+    let timezone = "";
+    try {
+      timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    } catch {
+      return;
+    }
+    if (!timezone || lastTimezoneSync === `${userId}:${timezone}`) return;
+    lastTimezoneSync = `${userId}:${timezone}`;
+    try {
+      const client = getClient();
+      const { error } = await client
+        .from("profiles")
+        .update({ timezone })
+        .eq("id", userId);
+      if (error) lastTimezoneSync = "";
+    } catch {
+      lastTimezoneSync = "";
+    }
+  }
+
   async function loadUser(user: AuthUser): Promise<AppUser> {
     const client = getClient();
     try {
@@ -212,7 +240,9 @@ export function createSupabaseBackend(): Backend {
         .select("role, name, age")
         .eq("id", user.id)
         .maybeSingle();
-      return mapUser(user, data as ProfileRow);
+      const mapped = mapUser(user, data as ProfileRow);
+      await syncTimeZone(user.id);
+      return mapped;
     } catch {
       // Sem acesso à tabela de perfis, o metadata ainda identifica a conta.
       return mapUser(user);
@@ -697,6 +727,25 @@ export function createSupabaseBackend(): Backend {
       return () => {
         void client.removeChannel(channel);
       };
+    },
+
+    /**
+     * Dispara os lembretes do horário pelo banco. Funciona como reforço do
+     * pg_cron (e substituto quando ele não está ativo), sempre limitado à
+     * própria conta pela função `run_my_task_reminders`.
+     */
+    async checkTaskReminders() {
+      const client = getClient();
+      const { error } = await client.rpc("run_my_task_reminders");
+      if (!error) return;
+      // Banco ainda sem a atualização do schema: o pg_cron continua tentando.
+      if (
+        error.code === "PGRST202" ||
+        /could not find the function|does not exist|schema cache/i.test(error.message ?? "")
+      ) {
+        return;
+      }
+      throw new Error(error.message || "Não foi possível verificar os lembretes.");
     },
   };
 }

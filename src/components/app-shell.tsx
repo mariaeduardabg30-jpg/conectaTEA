@@ -22,7 +22,9 @@ import { DependentSwitcher } from "@/components/dependent-switcher";
 import { HelpAcknowledgedBanner } from "@/components/help-acknowledged-banner";
 import { HelpButton } from "@/components/help-button";
 import { InstallApp } from "@/components/install-app";
+import { LiveClock } from "@/components/live-clock";
 import { NotificationBell } from "@/components/notification-bell";
+import { TaskReminderBanner } from "@/components/task-reminder-banner";
 import { EmptyState, LoadingBlock } from "@/components/ui/page-header";
 import { useApp } from "@/lib/data/provider";
 import { useHelpRequests } from "@/lib/hooks/use-help-requests";
@@ -215,16 +217,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="flex items-center gap-2">
+              <LiveClock />
               <DependentSwitcher
                 canManage={isResponsibleAccount}
                 manageHref={isResponsibleAccount ? "/responsavel/dependentes" : undefined}
               />
-              {isResponsibleAccount && (
-                <>
-                  <AlertSoundToggle />
-                  <NotificationBell />
-                </>
-              )}
+              {isResponsibleAccount && <AlertSoundToggle />}
+              <NotificationBell />
               <InstallApp compact className="icon-button" />
               <button
                 type="button"
@@ -243,6 +242,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           className="mx-auto w-full max-w-[1240px] px-4 pb-32 pt-6 sm:px-6 sm:pt-8 lg:px-8 lg:pb-16"
         >
           {area === "dependente" && <HelpAcknowledgedBanner />}
+          <TaskReminderBanner area={area} />
           {area === "dependente" && !activeDependent ? (
             dependentsLoaded ? (
               <div className="card mx-auto max-w-2xl p-6 sm:p-10">

@@ -35,6 +35,7 @@ with esperadas(tabela, coluna) as (
     ('profiles', 'name'),
     ('profiles', 'email'),
     ('profiles', 'age'),
+    ('profiles', 'timezone'),
     ('profiles', 'created_at'),
     ('profiles', 'updated_at'),
 
@@ -176,6 +177,8 @@ where n.nspname = 'public'
     'help_requests_notify',
     'help_requests_notify_acknowledged',
     'run_task_reminders',
+    'run_task_reminders_for',
+    'run_my_task_reminders',
     'dependents_set_link_code'
   )
 order by p.proname;

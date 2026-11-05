@@ -55,13 +55,20 @@ export async function playHelpAlert(): Promise<void> {
     }
   }
   const now = context.currentTime + 0.05;
-  const pattern = [659.25, 783.99, 987.77, 783.99];
-  pattern.forEach((frequency, index) => {
-    note(context, frequency, now + index * 0.22, 0.5, 0.14, "sine");
-  });
-  pattern.forEach((frequency, index) => {
-    note(context, frequency / 2, now + 1.2 + index * 0.22, 0.5, 0.07, "triangle");
-  });
+  const pattern = [659.25, 783.99, 987.77, 1174.66];
+  // Duas sequências ascendentes seguidas: o alerta se destaca de qualquer
+  // som ambiente sem depender de arquivo de áudio externo.
+  const rounds = [0, 1.5];
+  for (const offset of rounds) {
+    pattern.forEach((frequency, index) => {
+      const start = now + offset + index * 0.18;
+      note(context, frequency, start, 0.32, 0.3, "triangle");
+      note(context, frequency / 2, start, 0.32, 0.14, "sine");
+    });
+  }
+  // Pulso grave final, para quem está longe do aparelho perceber.
+  note(context, 392, now + 3.1, 0.7, 0.24, "triangle");
+  note(context, 196, now + 3.1, 0.7, 0.16, "sine");
 }
 
 /** Tom curto e suave para novas notificações (tarefas, lembretes). */
@@ -76,8 +83,9 @@ export async function playNotificationTone(): Promise<void> {
     }
   }
   const now = context.currentTime + 0.02;
-  note(context, 587.33, now, 0.18, 0.06, "sine");
-  note(context, 880, now + 0.09, 0.28, 0.06, "sine");
+  note(context, 587.33, now, 0.2, 0.12, "sine");
+  note(context, 880, now + 0.1, 0.32, 0.12, "sine");
+  note(context, 1174.66, now + 0.22, 0.36, 0.1, "triangle");
 }
 
 /** Som curto de confirmação para ações do dependente. */

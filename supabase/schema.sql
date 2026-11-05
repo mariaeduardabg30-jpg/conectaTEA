@@ -83,6 +83,17 @@ create table if not exists public.profiles (
 
 create index if not exists profiles_role_idx on public.profiles (role);
 
+-- Fuso horário do dispositivo de cada conta. O app atualiza este campo no
+-- login com Intl.DateTimeFormat().resolvedOptions().timeZone para que os
+-- lembretes do banco usem o horário local real, sem depender do fuso do
+-- servidor. O valor padrão atende bancos antigos e contas que ainda não
+-- entraram desde esta atualização.
+alter table public.profiles add column if not exists timezone text;
+alter table public.profiles alter column timezone set default 'America/Sao_Paulo';
+update public.profiles
+   set timezone = 'America/Sao_Paulo'
+ where timezone is null or trim(timezone) = '';
+
 -- ============================================================================
 -- Dependentes
 -- Cada linha é o espaço de uma pessoa.
@@ -1158,14 +1169,20 @@ create trigger help_requests_notify_acknowledged
   for each row execute function public.help_requests_notify_acknowledged();
 
 -- Lembrete no horário programado: executado pelo pg_cron a cada minuto.
-create or replace function public.run_task_reminders()
+-- A janela começa 5 minutos antes e termina 2 minutos depois do horário,
+-- assim o aviso chega perto do momento certo mesmo quando a tarefa foi criada
+-- em cima da hora. Cada destinatário recebe no máximo um lembrete por tarefa
+-- e por dia (índice notifications_dedupe_unique).
+--
+-- O fuso vem de profiles.timezone (sincronizado pelo dispositivo no login).
+-- Sem essa informação, usa America/Sao_Paulo como padrão.
+create or replace function public.run_task_reminders_for(target_user uuid)
 returns integer
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
-  tz constant text := 'America/Sao_Paulo';
   inserted integer := 0;
 begin
   with due as (
@@ -1176,14 +1193,47 @@ begin
       ri.emoji,
       ri.start_time,
       d.owner_id,
+      d.user_id,
       d.name as dependent_name,
-      (now() at time zone tz)::date as today
+      coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo') as tz,
+      (now() at time zone coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo')) as local_now,
+      (now() at time zone coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo'))::date as today
     from public.routine_items ri
     join public.dependents d on d.id = ri.dependent_id
+    left join public.profiles p on p.id = d.user_id
     where ri.active
-      and d.owner_id is not null
-      and to_char(ri.start_time, 'HH24:MI') = to_char(now() at time zone tz, 'HH24:MI')
-      and extract(dow from now() at time zone tz)::smallint = any(ri.days)
+      and (d.owner_id is not null or d.user_id is not null)
+      and (
+        target_user is null
+        or d.user_id = target_user
+        or d.owner_id = target_user
+      )
+      and extract(
+        dow from (now() at time zone coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo'))
+      )::smallint = any(ri.days)
+      and (now() at time zone coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo'))
+          >= (
+            (now() at time zone coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo'))::date
+            + ri.start_time
+          ) - interval '5 minutes'
+      and (now() at time zone coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo'))
+          < (
+            (now() at time zone coalesce(nullif(trim(p.timezone), ''), 'America/Sao_Paulo'))::date
+            + ri.start_time
+          ) + interval '2 minutes'
+  ),
+  recipients as (
+    -- Conta do dependente: o lembrete precisa chegar nele, nomeando a
+    -- atividade que ele deve realizar.
+    select due.*, due.user_id as recipient_id, 'dependente'::text as recipient_role
+    from due
+    where due.user_id is not null
+    union all
+    -- Responsável vinculado: continua recebendo o mesmo lembrete, como antes.
+    select due.*, due.owner_id as recipient_id, 'responsavel'::text as recipient_role
+    from due
+    where due.owner_id is not null
+      and due.owner_id is distinct from due.user_id
   ),
   ins as (
     insert into public.notifications (
@@ -1196,28 +1246,86 @@ begin
       scheduled_date
     )
     select
-      due.owner_id,
-      due.dependent_id,
+      r.recipient_id,
+      r.dependent_id,
       'task_reminder',
       'Hora da tarefa',
-      left(format('%s %s · %s', due.emoji, due.title, due.dependent_name), 300),
-      due.routine_item_id,
-      due.today
-    from due
+      left(
+        case
+          when r.recipient_role = 'dependente' then
+            format(
+              '%s %s · %s',
+              r.emoji,
+              r.title,
+              case
+                when r.local_now < (r.today + r.start_time)
+                  then 'começa às ' || to_char(r.start_time, 'HH24:MI')
+                else 'é agora!'
+              end
+            )
+          else
+            format('%s %s · %s', r.emoji, r.title, r.dependent_name)
+        end,
+        300
+      ),
+      r.routine_item_id,
+      r.today
+    from recipients r
     where not exists (
       select 1
       from public.notifications n
-      where n.recipient_id = due.owner_id
+      where n.recipient_id = r.recipient_id
         and n.type = 'task_reminder'
-        and n.routine_item_id = due.routine_item_id
-        and n.scheduled_date = due.today
+        and n.routine_item_id = r.routine_item_id
+        and n.scheduled_date = r.today
     )
+    on conflict do nothing
     returning 1
   )
   select count(*) into inserted from ins;
   return inserted;
 end;
 $$;
+
+revoke all on function public.run_task_reminders_for(uuid) from public;
+revoke all on function public.run_task_reminders_for(uuid) from anon, authenticated;
+
+-- Versão usada pelo pg_cron: percorre todas as contas.
+create or replace function public.run_task_reminders()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return public.run_task_reminders_for(null);
+end;
+$$;
+
+revoke all on function public.run_task_reminders() from public;
+revoke all on function public.run_task_reminders() from anon, authenticated;
+
+-- Versão usada pelo app aberto: garante o lembrete mesmo se o pg_cron ainda
+-- não estiver ativo, sem permitir que uma conta dispare avisos para outra.
+create or replace function public.run_my_task_reminders()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_user_id uuid := auth.uid();
+begin
+  if current_user_id is null then
+    return 0;
+  end if;
+  return public.run_task_reminders_for(current_user_id);
+end;
+$$;
+
+revoke all on function public.run_my_task_reminders() from public;
+revoke all on function public.run_my_task_reminders() from anon;
+grant execute on function public.run_my_task_reminders() to authenticated;
 
 -- Agendamento automático do lembrete. Se o pg_cron não estiver disponível,
 -- o restante do schema é aplicado normalmente e os lembretes ficam

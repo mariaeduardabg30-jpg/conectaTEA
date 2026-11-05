@@ -13,7 +13,7 @@
  * Ao mudar as estratégias de cache, aumente a VERSION para limpar o cache
  * antigo de quem já instalou o app.
  */
-const VERSION = "conectatea-v3";
+const VERSION = "conectatea-v4";
 const CACHE_PREFIX = "conectatea-";
 const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
 const PAGES_CACHE = `${CACHE_PREFIX}pages-${VERSION}`;
@@ -81,20 +81,24 @@ self.addEventListener("push", (event) => {
     payload = { title: "ConectaTEA", body: event.data ? event.data.text() : "" };
   }
   const title = payload.title || "ConectaTEA";
+  const urgent = Boolean(payload.urgent);
   const options = {
     body: payload.body || "",
     icon: `${BASE}/icons/icon-192.png`,
     badge: `${BASE}/icons/icon-192.png`,
     tag: payload.tag || "conectatea",
     requireInteraction: Boolean(payload.requireInteraction),
-    data: { url: payload.url || `${BASE}/responsavel/ajuda` },
+    renotify: Boolean(payload.tag),
+    vibrate: urgent ? [400, 150, 400, 150, 800] : [150, 80, 150],
+    silent: false,
+    data: { url: payload.url || `${BASE}/dependente` },
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
   const target =
-    (event.notification.data && event.notification.data.url) || `${BASE}/responsavel/ajuda`;
+    (event.notification.data && event.notification.data.url) || `${BASE}/dependente`;
   event.notification.close();
   event.waitUntil(
     (async () => {

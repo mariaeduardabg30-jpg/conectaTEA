@@ -1175,46 +1175,62 @@ export function createDemoBackend(): Backend {
     },
 
     // Apenas no modo demonstração: confere as tarefas de hoje e dispara o
-    // lembrete no horário programado. Em produção, quem cria os lembretes é
-    // o banco de dados (função agendada), mesmo com o app fechado.
+    // lembrete perto do horário programado. Em produção, quem cria os
+    // lembretes é o banco de dados (função agendada), mesmo com o app fechado.
     async checkTaskReminders() {
       const session = readSession();
-      if (!session || session.role !== "responsavel") return;
+      if (!session) return;
       const db = readDb();
       const now = new Date();
       const toMinutes = (time: string) =>
         Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
-      const current = toMinutes(
-        `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
-      );
+      const current = now.getHours() * 60 + now.getMinutes();
       const today = now.getDay();
       const dateKey = toDateKey(now);
-      const owned = db.dependents.filter((dependent) => dependent.ownerId === session.id);
-      for (const dependent of owned) {
+
+      // Responsável: recebe o lembrete das atividades dos dependentes que
+      // criou/vinculou. Dependente: recebe o lembrete das próprias atividades.
+      const targets =
+        session.role === "responsavel"
+          ? db.dependents
+              .filter((dependent) => dependent.ownerId === session.id)
+              .map((dependent) => ({ dependent, recipientId: session.id, role: "responsavel" as const }))
+          : db.dependents
+              .filter((dependent) => dependent.userId === session.id)
+              .map((dependent) => ({ dependent, recipientId: session.id, role: "dependente" as const }));
+
+      for (const target of targets) {
+        const { dependent } = target;
         const items = db.routineItems.filter((item) => {
-          if (!item.dependentId) return false;
+          if (item.dependentId !== dependent.id) return false;
           if (!item.active || !item.days.includes(today)) return false;
           const itemStart = toMinutes(item.startTime);
-          // No horário ou até 2 horas depois: lembra no momento certo e não
-          // perde o aviso para quem abre o app um pouco mais tarde.
-          return itemStart <= current && current - itemStart <= 120;
+          // Começa 5 minutos antes e tolera até 2 minutos depois do horário.
+          return current >= itemStart - 5 && current <= itemStart + 2;
         });
         for (const item of items) {
           const exists = db.notifications.some(
             (notification) =>
-              notification.recipientId === session.id &&
+              notification.recipientId === target.recipientId &&
               notification.type === "task_reminder" &&
               notification.routineItemId === item.id &&
               notification.scheduledDate === dateKey,
           );
           if (exists) continue;
+          const itemStart = toMinutes(item.startTime);
+          const body =
+            target.role === "dependente"
+              ? current < itemStart
+                ? `${item.emoji} ${item.title} · começa às ${item.startTime}`
+                : `${item.emoji} ${item.title} · é agora!`
+              : `${item.emoji} ${item.title} · ${dependent.name}`;
           const notification: AppNotification = {
             id: uid(),
-            recipientId: session.id,
+            recipientId: target.recipientId,
             dependentId: dependent.id,
             type: "task_reminder",
             title: "Hora da tarefa",
-            body: `${item.emoji} ${item.title} · ${dependent.name}`,
+            body,
             routineItemId: item.id,
             scheduledDate: dateKey,
             readAt: null,

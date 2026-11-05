@@ -7,6 +7,7 @@ import {
   CalendarCheck2,
   Check,
   ChevronRight,
+  Lock,
   Music2,
   PencilLine,
   Smile,
@@ -21,8 +22,11 @@ import { playConfirmationTone } from "@/lib/audio/alerts";
 import { useApp } from "@/lib/data/provider";
 import {
   addDays,
+  combineDateAndTime,
   formatLongDate,
   getWeekDays,
+  isRoutineAvailable,
+  minutesUntilTime,
   startOfWeek,
   toDateKey,
 } from "@/lib/date";
@@ -40,7 +44,9 @@ const EMPTY: TodayData = { items: [], completions: [], emotions: [] };
 
 export default function DependentTodayPage() {
   const { backend, activeDependent, dataSignal } = useApp();
-  const now = useClientNow();
+  // Atualiza a cada segundo para liberar o botão exatamente no horário,
+  // sem exigir recarregar a página.
+  const now = useClientNow(1000);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -106,6 +112,13 @@ export default function DependentTodayPage() {
   const toggle = async (item: RoutineItem) => {
     if (!activeDependent || !now || savingId) return;
     const alreadyDone = doneIds.has(item.id);
+    const availableAt = combineDateAndTime(now, item.startTime);
+    if (!alreadyDone && now.getTime() < availableAt.getTime()) {
+      setSaveError(
+        `Esta atividade fica disponível às ${item.startTime}. Você pode fazer outras enquanto isso.`,
+      );
+      return;
+    }
     const previous = data;
     const nextCompletions = alreadyDone
       ? data.completions.filter(
@@ -229,34 +242,68 @@ export default function DependentTodayPage() {
                 const done = doneIds.has(item.id);
                 const saving = savingId === item.id;
                 const next = todayItems[index + 1];
+                // Sem `now` (antes da hidratação) não bloqueia nada: o horário
+                // só é comparado com o relógio local depois que ele existe.
+                const available = !now || isRoutineAvailable(item.startTime, now);
+                const locked = !done && !available;
+                const minutesLeft = now ? minutesUntilTime(item.startTime, now) : 0;
+                const countdown =
+                  minutesLeft <= 1 ? "Libera em instantes" : `Libera em ${minutesLeft} min`;
                 return (
                   <li key={item.id} className="relative">
                     <button
                       type="button"
                       onClick={() => toggle(item)}
                       aria-pressed={done}
-                      aria-label={`${item.title}, ${item.startTime}${done ? ", concluída" : ", pendente"}. Toque para ${done ? "desmarcar" : "marcar como concluída"}`}
-                      disabled={saving}
+                      aria-disabled={locked || saving}
+                      aria-label={`${item.title}, ${item.startTime}${
+                        done
+                          ? ", concluída"
+                          : locked
+                            ? `, ${countdown.toLowerCase()}`
+                            : ", disponível"
+                      }. ${
+                        done
+                          ? "Toque para desmarcar"
+                          : locked
+                            ? "Aguarde o horário para concluir"
+                            : "Toque para marcar como concluída"
+                      }`}
+                      disabled={saving || locked}
                       className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition sm:gap-4 sm:px-4 ${
                         done
                           ? "border-primary/25 bg-primary-soft/50"
-                          : "border-line bg-surface hover:border-primary/30 hover:bg-surface-2"
+                          : locked
+                            ? "cursor-not-allowed border-line bg-surface-2/60"
+                            : "border-line bg-surface hover:border-primary/30 hover:bg-surface-2"
                       } ${saving ? "opacity-70" : ""}`}
                     >
                       <span
                         className={`flex size-11 shrink-0 items-center justify-center rounded-full border-2 transition ${
                           done
                             ? "border-primary bg-primary text-white"
-                            : "border-line-strong bg-surface text-muted"
+                            : locked
+                              ? "border-line bg-surface text-muted"
+                              : "border-line-strong bg-surface text-muted"
                         }`}
                         aria-hidden
                       >
-                        {done ? <Check className="size-6" strokeWidth={3} /> : <span className="text-xl">{item.emoji}</span>}
+                        {done ? (
+                          <Check className="size-6" strokeWidth={3} />
+                        ) : (
+                          <span className={`text-xl ${locked ? "opacity-50 grayscale" : ""}`}>
+                            {item.emoji}
+                          </span>
+                        )}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span
                           className={`block truncate font-display text-base font-extrabold ${
-                            done ? "text-muted line-through" : "text-ink"
+                            done
+                              ? "text-muted line-through"
+                              : locked
+                                ? "text-ink-soft"
+                                : "text-ink"
                           }`}
                         >
                           {item.title}
@@ -271,11 +318,25 @@ export default function DependentTodayPage() {
                               <span className="text-primary">Concluída</span>
                             </>
                           )}
+                          {locked && (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[0.65rem] font-extrabold text-ink-soft">
+                                <Lock className="size-3" aria-hidden />
+                                {countdown}
+                              </span>
+                            </>
+                          )}
                         </span>
                       </span>
-                      <span className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted" aria-hidden>
+                      <span
+                        className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted"
+                        aria-hidden
+                      >
                         {saving ? (
                           <span className="size-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        ) : locked ? (
+                          <Lock className="size-4" />
                         ) : (
                           <span className={`text-xl ${done ? "opacity-50" : ""}`}>{item.emoji}</span>
                         )}
