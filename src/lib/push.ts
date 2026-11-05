@@ -80,6 +80,22 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return output;
 }
 
+/**
+ * Uma inscrição antiga continua existindo depois de trocar a chave VAPID, mas
+ * deixa de receber push (o servidor usa outra chave privada). Comparar a chave
+ * permite renovar a inscrição automaticamente nesse caso.
+ */
+function matchesVapidKey(
+  subscription: PushSubscription,
+  expected: Uint8Array,
+): boolean {
+  const current = subscription.options.applicationServerKey;
+  if (!current) return false;
+  const bytes = new Uint8Array(current);
+  if (bytes.length !== expected.length) return false;
+  return bytes.every((value, index) => value === expected[index]);
+}
+
 async function getRegistration(): Promise<ServiceWorkerRegistration | null> {
   if (typeof window === "undefined" || !("serviceWorker" in navigator)) return null;
   try {
@@ -98,7 +114,10 @@ export async function getPushState(): Promise<PushState> {
   if (!registration) return "inactive";
   try {
     const subscription = await registration.pushManager.getSubscription();
-    return subscription ? "subscribed" : "inactive";
+    if (!subscription) return "inactive";
+    return matchesVapidKey(subscription, urlBase64ToUint8Array(VAPID_PUBLIC_KEY))
+      ? "subscribed"
+      : "inactive";
   } catch {
     return "inactive";
   }
@@ -125,11 +144,17 @@ export async function enablePushNotifications(): Promise<PushState> {
 
   let subscription: PushSubscription | null = null;
   try {
+    const applicationServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
     subscription = await registration.pushManager.getSubscription();
+    if (subscription && !matchesVapidKey(subscription, applicationServerKey)) {
+      // Chave pública trocada: a inscrição antiga não recebe mais push.
+      await subscription.unsubscribe();
+      subscription = null;
+    }
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource,
+        applicationServerKey: applicationServerKey as BufferSource,
       });
     }
   } catch (cause) {

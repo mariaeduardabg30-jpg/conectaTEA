@@ -2,17 +2,20 @@
 // ConectaTEA · send-push
 //
 // Envia notificações push (Web Push) para o destinatário de cada evento:
-// responsável e/ou a própria conta do dependente, conforme o tipo. É
-// chamada por Database Webhooks do Supabase:
+// responsável e/ou a própria conta do dependente, conforme o tipo. Pode ser
+// chamada de três formas:
 //
-//   1) tabela public.notifications  · evento INSERT
-//      → destinatário é o próprio recipient_id da linha;
-//   2) tabela public.help_requests  · evento INSERT
-//      → destinatário é o owner_id do dependente.
+//   1) pelo app, com o JWT da sessão, logo após criar um pedido de ajuda
+//      (tabela help_requests · INSERT);
+//   2) pelo pg_net, a partir de um trigger no banco, usando o segredo
+//      compartilhado (tabela notifications · INSERT) — substituto gratuito
+//      dos Database Webhooks;
+//   3) por Database Webhooks do Supabase, quando o plano oferecer o recurso.
 //
-// Segurança: a função exige o header `x-webhook-secret` com o valor definido
-// em WEBHOOK_SECRET (quando configurado). A leitura das inscrições usa a
-// service role, então a função só deve ser chamada pelo webhook.
+// Segurança: chamadas de servidor exigem o header `x-webhook-secret` com o
+// valor definido em WEBHOOK_SECRET. Chamadas do app exigem um JWT válido e só
+// são aceitas para o próprio espaço do dependente. A leitura das inscrições
+// usa a service role.
 //
 // Deploy:
 //   supabase functions deploy send-push --no-verify-jwt
@@ -47,18 +50,35 @@ Deno.serve(async (request) => {
     return json({ error: "Método não suportado." }, 405);
   }
 
-  if (WEBHOOK_SECRET) {
-    const secret = request.headers.get("x-webhook-secret") ?? "";
-    if (secret !== WEBHOOK_SECRET) {
-      return json({ error: "Não autorizado." }, 401);
-    }
-  }
-
   if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
     return json({ error: "Chaves VAPID não configuradas." }, 500);
   }
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     return json({ error: "Credenciais do Supabase não configuradas." }, 500);
+  }
+
+  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { persistSession: false },
+  });
+
+  // `authorizedBySecret` identifica chamadas de servidor (pg_net/webhook).
+  // Sem segredo, a chamada precisa vir do app com um JWT de sessão válido.
+  const authorizedBySecret =
+    Boolean(WEBHOOK_SECRET) &&
+    (request.headers.get("x-webhook-secret") ?? "") === WEBHOOK_SECRET;
+
+  let callerId: string | null = null;
+  if (!authorizedBySecret) {
+    const authorization = request.headers.get("Authorization") ?? "";
+    const token = authorization.replace(/^Bearer\s+/i, "").trim();
+    if (!token) {
+      return json({ error: "Não autorizado." }, 401);
+    }
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) {
+      return json({ error: "Não autorizado." }, 401);
+    }
+    callerId = data.user.id;
   }
 
   let payload: Row;
@@ -71,10 +91,6 @@ Deno.serve(async (request) => {
   const table = typeof payload.table === "string" ? payload.table : "";
   const record = (payload.record ?? payload) as Row;
 
-  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-  });
-
   // Monta destinatários, textos e destino do clique.
   let recipients: string[] = [];
   let title = "ConectaTEA";
@@ -84,6 +100,10 @@ Deno.serve(async (request) => {
   let tag = crypto.randomUUID();
 
   if (table === "notifications" || typeof record.recipient_id === "string") {
+    // Notificações só podem ser disparadas pelo servidor (pg_net/webhook).
+    if (!authorizedBySecret) {
+      return json({ error: "Não autorizado." }, 403);
+    }
     recipients = [String(record.recipient_id)];
     title = typeof record.title === "string" && record.title ? record.title : "ConectaTEA";
     body = typeof record.body === "string" ? record.body : "";
@@ -94,12 +114,16 @@ Deno.serve(async (request) => {
     const dependentId = String(record.dependent_id ?? "");
     const { data: dependent } = await supabase
       .from("dependents")
-      .select("name, owner_id")
+      .select("name, owner_id, user_id")
       .eq("id", dependentId)
       .maybeSingle();
 
     if (!dependent?.owner_id) {
       return json({ sent: 0, reason: "dependente sem responsável vinculado" });
+    }
+    // Chamadas do app: o dependente só pode avisar sobre o próprio espaço.
+    if (callerId && dependent.user_id !== callerId && dependent.owner_id !== callerId) {
+      return json({ error: "Não autorizado." }, 403);
     }
     recipients = [String(dependent.owner_id)];
     title = "Pedido de ajuda";

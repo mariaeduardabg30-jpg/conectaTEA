@@ -179,6 +179,7 @@ where n.nspname = 'public'
     'run_task_reminders',
     'run_task_reminders_for',
     'run_my_task_reminders',
+    'dispatch_notification_push',
     'dependents_set_link_code'
   )
 order by p.proname;
@@ -198,7 +199,8 @@ where trigger_name in (
   'routine_items_notify_responsible',
   'task_completions_notify_responsible',
   'help_requests_notify_responsible',
-  'help_requests_notify_acknowledged'
+  'help_requests_notify_acknowledged',
+  'notifications_dispatch_push'
 )
 order by event_object_table, trigger_name;
 
@@ -308,6 +310,66 @@ begin
   exception
     when others then
       raise notice '12. pg_cron · FALTANDO (extensão pg_cron não disponível — lembretes agendados não rodam)';
+  end;
+end
+$$;
+
+-- 13) Push no plano Free: pg_net + segredos no Vault -------------------------
+do $$
+declare
+  projeto text;
+  anon text;
+  segredo text;
+begin
+  begin
+    if exists (
+      select 1
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'net' and p.proname = 'http_post'
+    ) then
+      raise notice '13. pg_net · ok';
+    else
+      raise notice '13. pg_net · FALTANDO (ative Database → Extensions → pg_net)';
+    end if;
+  exception
+    when others then
+      raise notice '13. pg_net · FALTANDO (ative Database → Extensions → pg_net)';
+  end;
+
+  begin
+    select decrypted_secret into projeto
+    from vault.decrypted_secrets
+    where name = 'conectatea_project_url';
+
+    select decrypted_secret into anon
+    from vault.decrypted_secrets
+    where name = 'conectatea_anon_key';
+
+    select decrypted_secret into segredo
+    from vault.decrypted_secrets
+    where name = 'conectatea_webhook_secret';
+
+    if coalesce(projeto, '') = '' then
+      raise notice '13. vault · conectatea_project_url · FALTANDO';
+    else
+      raise notice '13. vault · conectatea_project_url · ok';
+    end if;
+
+    if coalesce(anon, '') = '' then
+      raise notice '13. vault · conectatea_anon_key · FALTANDO';
+    else
+      raise notice '13. vault · conectatea_anon_key · ok';
+    end if;
+
+    if coalesce(segredo, '') = '' then
+      raise notice '13. vault · conectatea_webhook_secret · FALTANDO';
+    else
+      raise notice '13. vault · conectatea_webhook_secret · ok';
+    end if;
+  exception
+    when others then
+      raise notice '13. vault · FALTANDO (extensão Vault não disponível)';
   end;
 end
 $$;

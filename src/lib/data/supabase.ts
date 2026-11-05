@@ -232,6 +232,25 @@ export function createSupabaseBackend(): Backend {
     }
   }
 
+  /**
+   * Aciona a Edge Function send-push com o payload do evento. No plano Free
+   * do Supabase não há Database Webhooks; os pedidos de ajuda são enviados
+   * pelo app de quem pediu (que está aberto no momento da ação), e o banco
+   * cobre os lembretes agendados via pg_net (ver supabase/schema.sql).
+   *
+   * A chamada usa o JWT da sessão e nunca deve interromper a ação principal:
+   * sem push configurado o app continua funcionando normalmente.
+   */
+  async function dispatchPush(payload: { table: string; record: Row }): Promise<void> {
+    try {
+      const client = getClient();
+      const { error } = await client.functions.invoke("send-push", { body: payload });
+      if (error) console.error("Falha ao acionar a Edge Function send-push", error);
+    } catch (cause) {
+      console.error("Falha ao acionar a Edge Function send-push", cause);
+    }
+  }
+
   async function loadUser(user: AuthUser): Promise<AppUser> {
     const client = getClient();
     try {
@@ -579,7 +598,11 @@ export function createSupabaseBackend(): Backend {
         .select("*")
         .single();
       if (error) fail(error);
-      return mapHelpRequest(data as Row);
+      const row = data as Row;
+      // O app do dependente está aberto neste momento, então ele consegue
+      // acionar o push mesmo que o responsável esteja com o app fechado.
+      void dispatchPush({ table: "help_requests", record: row });
+      return mapHelpRequest(row);
     },
 
     async acknowledgeHelpRequest(id, byName) {

@@ -13,7 +13,7 @@
  * Ao mudar as estratégias de cache, aumente a VERSION para limpar o cache
  * antigo de quem já instalou o app.
  */
-const VERSION = "conectatea-v4";
+const VERSION = "conectatea-v5";
 const CACHE_PREFIX = "conectatea-";
 const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
 const PAGES_CACHE = `${CACHE_PREFIX}pages-${VERSION}`;
@@ -73,6 +73,19 @@ self.addEventListener("activate", (event) => {
  *  - "push" mostra a notificação vinda do servidor (Edge Function send-push).
  *  - "notificationclick" abre ou foca o app no destino indicado.
  */
+
+// A função envia caminhos como /responsavel/ajuda. No GitHub Pages o app vive
+// em /conectaTEA, então o caminho precisa ser prefixado com o base path do
+// service worker antes de abrir a janela.
+function resolveTarget(value) {
+  const fallback = `${BASE}/dependente`;
+  if (!value || typeof value !== "string") return fallback;
+  if (/^https?:\/\//i.test(value)) return value;
+  const path = value.startsWith("/") ? value : `/${value}`;
+  if (BASE && (path === BASE || path.startsWith(`${BASE}/`))) return path;
+  return `${BASE}${path}`;
+}
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try {
@@ -91,14 +104,15 @@ self.addEventListener("push", (event) => {
     renotify: Boolean(payload.tag),
     vibrate: urgent ? [400, 150, 400, 150, 800] : [150, 80, 150],
     silent: false,
-    data: { url: payload.url || `${BASE}/dependente` },
+    data: { url: resolveTarget(payload.url) },
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
-  const target =
-    (event.notification.data && event.notification.data.url) || `${BASE}/dependente`;
+  const target = resolveTarget(
+    event.notification.data && event.notification.data.url,
+  );
   event.notification.close();
   event.waitUntil(
     (async () => {

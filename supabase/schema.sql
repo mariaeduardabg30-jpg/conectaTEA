@@ -10,6 +10,7 @@
 --   · notifications — notificações para o responsável (criadas pelo banco)
 --   · run_task_reminders + pg_cron — lembrete no horário programado
 --   · push_subscriptions — inscrições Web Push por dispositivo
+--   · pg_net + Vault — disparo do push no plano Free (sem Database Webhooks)
 -- ============================================================================
 
 create extension if not exists "pgcrypto";
@@ -1395,6 +1396,108 @@ create policy "push_subscriptions_delete_own"
 
 revoke all on public.push_subscriptions from public, anon, authenticated;
 grant select, insert, delete on public.push_subscriptions to authenticated;
+
+-- ============================================================================
+-- ENVIO DE PUSH NO PLANO FREE (pg_net)
+-- O plano Free não oferece Database Webhooks. O pg_net faz o mesmo papel:
+-- a cada notificação criada pelo banco, chama a Edge Function send-push por
+-- HTTP. A URL do projeto e o segredo compartilhado ficam no Vault:
+--
+--   select vault.create_secret('https://SEU-PROJETO.supabase.co',
+--                              'conectatea_project_url');
+--   select vault.create_secret('<chave anon pública do projeto>',
+--                              'conectatea_anon_key');
+--   select vault.create_secret('<mesmo valor de WEBHOOK_SECRET>',
+--                              'conectatea_webhook_secret');
+--
+-- A chave anon é pública e serve apenas para passar pelo gateway da função;
+-- quem autoriza o envio é o header x-webhook-secret. Sem esses segredos o
+-- trigger não envia nada e o app continua funcionando com o alerta local. O
+-- pedido de ajuda (help_request) é ignorado aqui porque o próprio app do
+-- dependente chama a função no instante do toque — assim o aviso chega ao
+-- responsável mesmo com o app dele fechado.
+-- ============================================================================
+do $$
+begin
+  begin
+    create schema if not exists extensions;
+    create extension if not exists pg_net with schema extensions;
+  exception
+    when others then
+      raise warning 'pg_net não disponível: push agendado não será enviado. Ative em Database → Extensions → pg_net.';
+  end;
+end
+$$;
+
+create or replace function public.dispatch_notification_push()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  project_url text;
+  anon_key text;
+  webhook_secret text;
+begin
+  if new.type = 'help_request' then
+    return new;
+  end if;
+
+  begin
+    select decrypted_secret
+    into project_url
+    from vault.decrypted_secrets
+    where name = 'conectatea_project_url';
+
+    select decrypted_secret
+    into anon_key
+    from vault.decrypted_secrets
+    where name = 'conectatea_anon_key';
+
+    select decrypted_secret
+    into webhook_secret
+    from vault.decrypted_secrets
+    where name = 'conectatea_webhook_secret';
+  exception
+    when others then
+      return new;
+  end;
+
+  if coalesce(project_url, '') = ''
+    or coalesce(anon_key, '') = ''
+    or coalesce(webhook_secret, '') = '' then
+    return new;
+  end if;
+
+  perform net.http_post(
+    url := project_url || '/functions/v1/send-push',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'apikey', anon_key,
+      'Authorization', 'Bearer ' || anon_key,
+      'x-webhook-secret', webhook_secret
+    ),
+    body := jsonb_build_object(
+      'table', 'notifications',
+      'record', to_jsonb(new)
+    )
+  );
+
+  return new;
+exception
+  when others then
+    raise warning 'Falha ao disparar push da notificação %: %', new.id, sqlerrm;
+    return new;
+end;
+$$;
+
+drop trigger if exists notifications_dispatch_push on public.notifications;
+create trigger notifications_dispatch_push
+  after insert on public.notifications
+  for each row execute function public.dispatch_notification_push();
+
+revoke all on function public.dispatch_notification_push() from public;
 
 -- Realtime: o app recebe as notificações na hora em que são criadas.
 do $$

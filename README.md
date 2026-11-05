@@ -295,9 +295,10 @@ aviso chega até com o app fechado:
    ```
 
 2. No **SQL Editor**, confirme que o `schema.sql` rodou até o fim (ele cria
-   `push_subscriptions` e agenda o lembrete). Se o `pg_cron` não estiver disponível, o script
-   mostra um `WARNING` e todo o restante é aplicado normalmente — basta ativar a extensão
-   **pg_cron** (**Database → Extensions**) e rodar de novo.
+   `push_subscriptions` e agenda o lembrete). Se o `pg_cron` ou o `pg_net` não estiverem
+   disponíveis, o script mostra um `WARNING` e todo o restante é aplicado normalmente — basta
+   ativar as extensões em **Database → Extensions** e rodar de novo.
+
 3. Faça o deploy da Edge Function [`supabase/functions/send-push`](./supabase/functions/send-push/index.ts):
 
    ```bash
@@ -305,14 +306,32 @@ aviso chega até com o app fechado:
    supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... WEBHOOK_SECRET=escolha-um-segredo-longo
    ```
 
-4. Em **Database → Webhooks** (ou **Integrations → Database Webhooks**), crie dois webhooks
-   apontando para a função, com o header `x-webhook-secret: <WEBHOOK_SECRET>`:
-   - tabela `public.help_requests`, evento **INSERT**;
-   - tabela `public.notifications`, evento **INSERT**.
-5. No build do site, defina `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (a chave **pública** gerada no passo 1)
+4. **Plano Free (sem Database Webhooks):** o `schema.sql` instala o `pg_net` e cria o trigger
+   `notifications_dispatch_push`, que chama a função a cada notificação criada pelo banco — o
+   mesmo papel de um webhook, sem precisar do plano Pro. Guarde no **Vault** a URL do projeto e
+   o mesmo valor de `WEBHOOK_SECRET`:
+
+   ```sql
+   select vault.create_secret('https://SEU-PROJETO.supabase.co', 'conectatea_project_url');
+   select vault.create_secret('sua-chave-anon-publica', 'conectatea_anon_key');
+   select vault.create_secret('escolha-um-segredo-longo', 'conectatea_webhook_secret');
+   ```
+
+   A chave anon é pública e só serve para passar pelo gateway da função; a autorização do envio
+   usa o `WEBHOOK_SECRET`. Sem esses segredos o trigger não envia nada (e não quebra o app). O
+   pedido de ajuda é a exceção: o próprio app do dependente chama a função no instante do toque,
+   então ele chega ao responsável mesmo com o app deste fechado. O trigger ignora `help_request`
+   para não duplicar o aviso.
+
+5. **Plano Pro (opcional):** em **Database → Webhooks**, você pode apontar um webhook de
+   **INSERT** na tabela `public.notifications` para a função, com o header
+   `x-webhook-secret: <WEBHOOK_SECRET>`. Nesse caso, não crie webhook em `help_requests` e
+   mantenha o `pg_net` desativado para não receber o mesmo aviso duas vezes.
+
+6. No build do site, defina `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (a chave **pública** gerada no passo 1)
    — na Vercel/Node como variável de ambiente; no GitHub Pages, em
    **Settings → Secrets and variables → Actions → Variables**.
-6. No app, o aviso global de **Notificações no aparelho** aparece no topo (ou toque no sino →
+7. No app, o aviso global de **Notificações no aparelho** aparece no topo (ou toque no sino →
    **Ativar notificações**). Ele pergunta a permissão para notificações neste dispositivo e,
    quando o push está configurado, já cria a inscrição. Vale para as duas contas: o responsável
    recebe pedidos de ajuda e novidades da rotina; o dependente recebe os lembretes das próprias
