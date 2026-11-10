@@ -1,5 +1,5 @@
 import { getSupabase } from "@/lib/supabase/client";
-import type { Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
+import type { AuthEvent, Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
 import type {
   AppRole,
   AppUser,
@@ -279,15 +279,30 @@ export function createSupabaseBackend(): Backend {
 
     onAuthChange(callback) {
       const client = getClient();
-      const { data } = client.auth.onAuthStateChange((_event, session) => {
+      const { data } = client.auth.onAuthStateChange((event, session) => {
+        const kind: AuthEvent =
+          event === "PASSWORD_RECOVERY"
+            ? "password_recovery"
+            : event === "SIGNED_IN"
+              ? "signed_in"
+              : event === "SIGNED_OUT"
+                ? "signed_out"
+                : event === "USER_UPDATED"
+                  ? "user_updated"
+                  : event === "TOKEN_REFRESHED"
+                    ? "token_refreshed"
+                    : event === "INITIAL_SESSION"
+                      ? "initial"
+                      : "other";
         const current = session?.user;
         if (!current) {
-          callback(null);
+          callback(null, kind);
           return;
         }
-        void loadUser(current)
-          .then(callback)
-          .catch(() => callback(mapUser(current)));
+        void loadUser(current).then(
+          (user) => callback(user, kind),
+          () => callback(mapUser(current), kind),
+        );
       });
       return () => data.subscription.unsubscribe();
     },

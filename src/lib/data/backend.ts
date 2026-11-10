@@ -29,10 +29,20 @@ export type SignUpResult = {
   needsConfirmation: boolean;
 };
 
+/** Eventos de autenticação relevantes para a interface. */
+export type AuthEvent =
+  | "initial"
+  | "signed_in"
+  | "signed_out"
+  | "password_recovery"
+  | "user_updated"
+  | "token_refreshed"
+  | "other";
+
 export interface Backend {
   mode: "supabase" | "demo";
   getUser(): Promise<AppUser | null>;
-  onAuthChange(callback: (user: AppUser | null) => void): () => void;
+  onAuthChange(callback: (user: AppUser | null, event: AuthEvent) => void): () => void;
   /**
    * `role` só é usado pelo modo demonstração, que não tem banco para consultar
    * o papel da conta. No Supabase o papel vem do perfil do usuário.

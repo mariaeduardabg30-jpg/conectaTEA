@@ -214,13 +214,21 @@ salvo antes da mudança não consegue abrir. Reinstalar pelo endereço atual cor
    NEXT_PUBLIC_VAPID_PUBLIC_KEY=sua-chave-publica-vapid
    ```
 
-5. Em **Authentication → URL Configuration**, adicione a URL de retorno da recuperação de senha
-   em **Redirect URLs**, por exemplo:
+5. Em **Authentication → URL Configuration**, defina a **Site URL** com o endereço principal do
+   app e cadastre as URLs de retorno em **Redirect URLs**:
 
    ```text
+   Site URL (produção): https://mariaeduardabg30-jpg.github.io/conectaTEA/
+   Redirect URLs:
    http://localhost:3000/redefinir-senha
    https://mariaeduardabg30-jpg.github.io/conectaTEA/redefinir-senha
+   https://mariaeduardabg30-jpg.github.io/conectaTEA/redefinir-senha/
    ```
+
+   O Supabase só aceita um `redirectTo` que esteja nessa lista. Se ele não bater, o link do
+   e-mail cai na **Site URL** — por isso, com a Site URL em `http://localhost:3000`, o link de
+   recuperação abre o localhost no celular e parece “quebrado”. Para testar em produção, a Site
+   URL precisa ser a URL publicada no GitHub Pages.
 
 6. Reinicie o servidor de desenvolvimento.
 
@@ -394,8 +402,10 @@ Antes do primeiro deploy, no GitHub:
 4. Se quiser notificações push, crie a Variable `NEXT_PUBLIC_VAPID_PUBLIC_KEY` em
    **Settings → Secrets and variables → Actions → Variables** (veja “Notificações”).
 5. Rode o workflow **Deploy no GitHub Pages** (Actions → Run workflow) ou faça um push na `main`.
-6. No Supabase, adicione a URL publicada em **Authentication → URL Configuration → Redirect URLs**,
-   incluindo o caminho `/redefinir-senha`.
+6. No Supabase, em **Authentication → URL Configuration**, coloque a URL publicada em **Site URL**
+   e adicione as variantes com e sem barra final em **Redirect URLs**, com o caminho
+   `/redefinir-senha`. Sem isso, o link do e-mail de recuperação é redirecionado para a Site URL
+   (normalmente `http://localhost:3000`) e não abre no celular.
 
 > **Por que o site não abria:** o arquivo `CNAME` apontava para `conecatea.com`, mas esse domínio
 > não está registrado (o DNS não resolve). O GitHub Pages redirecionava o endereço válido do

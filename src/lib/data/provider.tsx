@@ -35,6 +35,19 @@ function notificationPath(notification: AppNotification, role: AppRole): string 
     : `${basePath}/responsavel/rotina`;
 }
 
+/** Caminho publicado da tela de definição de nova senha. */
+function resetPasswordPath(): string {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  return `${basePath}/redefinir-senha/`;
+}
+
+function isResetPasswordPage(): boolean {
+  if (typeof window === "undefined") return false;
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+  const current = window.location.pathname.replace(/\/+$/, "");
+  return current === `${basePath}/redefinir-senha`;
+}
+
 function browserNotify(notification: AppNotification, role: AppRole) {
   if (typeof window === "undefined" || typeof Notification === "undefined") return;
   if (Notification.permission !== "granted") return;
@@ -127,10 +140,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (alive) setReady(true);
       });
 
-    const unsubscribe = backend.onAuthChange((current) => {
+    const unsubscribe = backend.onAuthChange((current, event) => {
       if (!alive) return;
       setUser(current);
       if (!current) resetSignedOut();
+      if (event === "password_recovery" && !isResetPasswordPage()) {
+        // O link do e-mail pode cair na raiz do site (ou em outra tela) quando
+        // a URL de retorno não está cadastrada no Supabase. Nesse caso, leva a
+        // pessoa para a tela de definição de nova senha, onde a sessão já vale.
+        window.location.replace(resetPasswordPath());
+      }
     });
 
     return () => {
