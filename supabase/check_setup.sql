@@ -167,6 +167,7 @@ where n.nspname = 'public'
     'claim_dependent_by_email',
     'handle_new_user',
     'link_dependent_account',
+    'validate_dependent_email',
     'prevent_profile_role_change',
     'touch_updated_at',
     'link_dependent_by_code',
@@ -193,6 +194,7 @@ from information_schema.triggers
 where trigger_name in (
   'on_auth_user_created',
   'dependents_link_account',
+  'dependents_validate_email',
   'profiles_protect_role',
   'profiles_touch_updated_at',
   'dependents_set_link_code',

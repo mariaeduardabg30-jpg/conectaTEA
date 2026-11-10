@@ -377,7 +377,6 @@ export function createSupabaseBackend(): Backend {
 
     async createDependent(input: DependentInput) {
       const client = getClient();
-      const ownerId = await currentUserId();
       const email = input.email?.trim() || null;
       if (!email) {
         throw new Error(
@@ -393,28 +392,9 @@ export function createSupabaseBackend(): Backend {
         age: input.age,
       };
 
-      // Já vinculado a esta conta? Atualiza o perfil em vez de duplicar.
-      const { data: mine, error: mineError } = await client
-        .from("dependents")
-        .select("*")
-        .eq("owner_id", ownerId);
-      if (mineError) fail(mineError);
-      const alreadyLinked = ((mine ?? []) as Row[]).find(
-        (row) => nullableText(row.email)?.toLowerCase() === email.toLowerCase(),
-      );
-      if (alreadyLinked) {
-        const { data, error } = await client
-          .from("dependents")
-          .update(details)
-          .eq("id", text(alreadyLinked.id))
-          .select("*")
-          .single();
-        if (error) fail(error);
-        return mapDependent(data as Row);
-      }
-
-      // O dependente precisa ter criado a própria conta antes. A linha dele
-      // fica com owner_id nulo e é reivindicada aqui, por e-mail.
+      // A RPC confere se a conta do dependente existe de verdade e reivindica
+      // o espaço dele. Chamar sempre (mesmo já vinculado) evita reaproveitar
+      // um perfil antigo cujo e-mail não tem mais conta.
       const { data: claimed, error: claimError } = await client.rpc(
         "claim_dependent_by_email",
         { target_email: email },
@@ -434,7 +414,7 @@ export function createSupabaseBackend(): Backend {
       const row = (Array.isArray(claimed) ? claimed[0] : claimed) as Row | null;
       if (!row?.id) {
         throw new Error(
-          "Não encontramos uma conta de dependente disponível com este e-mail. Confira o e-mail ou veja se a conta já não está vinculada a outro responsável.",
+          "Não encontramos uma conta de dependente disponível com este e-mail. Confira se a pessoa já criou a conta como dependente ou se ela já não está vinculada a outro responsável.",
         );
       }
 

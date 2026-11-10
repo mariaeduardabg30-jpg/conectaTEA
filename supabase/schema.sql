@@ -352,6 +352,7 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 
 -- Se o perfil do dependente for criado depois da conta, o e-mail faz o vínculo.
+-- Também mantém o vínculo correto quando o responsável corrige o e-mail.
 create or replace function public.link_dependent_account()
 returns trigger
 language plpgsql
@@ -359,7 +360,7 @@ security definer
 set search_path = public, auth
 as $$
 begin
-  if new.user_id is null and new.email is not null then
+  if new.email is not null then
     select u.id
       into new.user_id
       from auth.users u
@@ -374,6 +375,45 @@ drop trigger if exists dependents_link_account on public.dependents;
 create trigger dependents_link_account
   before insert or update of email on public.dependents
   for each row execute function public.link_dependent_account();
+
+-- Só aceita e-mail de uma conta de dependente que já existe de verdade.
+-- Isso impede conectar um e-mail inventado ou que nunca criou conta.
+create or replace function public.validate_dependent_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if new.email is null then
+    return new;
+  end if;
+
+  -- Ao editar outros campos, o e-mail antigo (mesmo que legado) não bloqueia.
+  if tg_op = 'UPDATE' and new.email is not distinct from old.email then
+    return new;
+  end if;
+
+  new.email := lower(trim(new.email));
+
+  if not exists (
+    select 1
+    from public.profiles p
+    join auth.users u on u.id = p.id
+    where p.role = 'dependente'
+      and lower(u.email) = new.email
+  ) then
+    raise exception 'Não encontramos uma conta de dependente com este e-mail. Peça para a pessoa criar a conta em "Sou dependente → Criar conta" e tente novamente.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists dependents_validate_email on public.dependents;
+create trigger dependents_validate_email
+  before insert or update of email on public.dependents
+  for each row execute function public.validate_dependent_email();
 
 -- ============================================================================
 -- Segurança em nível de linha (RLS)
@@ -420,8 +460,9 @@ grant execute on function public.can_access_dependent(uuid) to authenticated;
 grant execute on function public.is_owner_of_dependent(uuid) to authenticated;
 
 -- Vincula ao responsável um perfil que o próprio dependente criou.
--- A linha começa com owner_id nulo (o dependente se cadastrou sozinho) e só
--- pode ser reivindicada uma vez, pelo e-mail, por uma conta de responsável.
+-- A conta precisa existir em profiles (papel dependente): um e-mail inventado
+-- ou sem conta nunca é vinculado. A linha começa com owner_id nulo e só pode
+-- ser reivindicada uma vez, por uma conta de responsável.
 create or replace function public.claim_dependent_by_email(target_email text)
 returns public.dependents
 language plpgsql
@@ -429,7 +470,10 @@ security definer
 set search_path = public, auth
 as $$
 declare
+  normalized text := lower(trim(coalesce(target_email, '')));
+  account public.profiles%rowtype;
   claimed public.dependents;
+  existing public.dependents;
 begin
   if auth.uid() is null then
     raise exception 'Entre novamente para continuar.';
@@ -444,20 +488,67 @@ begin
     raise exception 'Apenas o responsável pode vincular um perfil.';
   end if;
 
-  update public.dependents d
-     set owner_id = auth.uid()
-   where d.id = (
-     select d2.id
-     from public.dependents d2
-     where d2.owner_id is null
-       and d2.email is not null
-       and lower(d2.email) = lower(trim(target_email))
-     order by d2.created_at
-     limit 1
-   )
-   returning * into claimed;
+  if normalized = '' then
+    return null;
+  end if;
 
-  return claimed;
+  -- A conta do dependente precisa existir para valer.
+  select p.*
+    into account
+    from public.profiles p
+    join auth.users u on u.id = p.id
+   where p.role = 'dependente'
+     and lower(u.email) = normalized
+   limit 1;
+
+  if account.id is null then
+    return null;
+  end if;
+
+  select *
+    into existing
+    from public.dependents d
+   where d.user_id = account.id
+      or lower(d.email) = normalized
+   order by (d.user_id = account.id) desc nulls last
+   limit 1;
+
+  if existing.id is not null then
+    if existing.owner_id is not null and existing.owner_id <> auth.uid() then
+      return null;
+    end if;
+
+    if exists (
+      select 1
+      from public.dependents d
+      where d.id <> existing.id
+        and d.email is not null
+        and lower(d.email) = normalized
+    ) then
+      return null;
+    end if;
+
+    update public.dependents
+       set owner_id = auth.uid(),
+           user_id = account.id,
+           email = normalized
+     where id = existing.id
+       and (owner_id is null or owner_id = auth.uid())
+    returning * into claimed;
+
+    return claimed;
+  end if;
+
+  begin
+    insert into public.dependents (owner_id, name, email, age, user_id)
+    values (auth.uid(), left(coalesce(account.name, 'Dependente'), 60), normalized, account.age, account.id)
+    returning * into claimed;
+
+    return claimed;
+  exception
+    when unique_violation then
+      return null;
+  end;
 end;
 $$;
 
@@ -709,6 +800,10 @@ select
 from auth.users u
 where u.raw_user_meta_data ->> 'role' = 'dependente'
   and u.email is not null
+  and exists (
+    select 1 from public.profiles p
+    where p.id = u.id and p.role = 'dependente'
+  )
   and not exists (
     select 1 from public.dependents d where d.user_id = u.id
   )
@@ -717,6 +812,33 @@ where u.raw_user_meta_data ->> 'role' = 'dependente'
     from public.dependents d
     where d.email is not null and lower(d.email) = lower(u.email)
   );
+
+-- Completa o vínculo de linhas antigas que já tinham o e-mail de uma conta real.
+update public.dependents d
+   set user_id = p.id
+  from public.profiles p
+  join auth.users u on u.id = p.id
+ where d.user_id is null
+   and d.email is not null
+   and p.role = 'dependente'
+   and lower(u.email) = lower(d.email)
+   and not exists (
+     select 1 from public.dependents d2 where d2.user_id = p.id
+   );
+
+-- Perfis antigos que guardavam um e-mail sem conta correspondente não devem
+-- continuar parecendo vinculados. O perfil e os dados são mantidos; apenas o
+-- e-mail inválido é removido para poder ser corrigido depois.
+update public.dependents d
+   set email = null
+ where d.email is not null
+   and not exists (
+     select 1
+     from public.profiles p
+     join auth.users u on u.id = p.id
+     where p.role = 'dependente'
+       and lower(u.email) = lower(d.email)
+   );
 
 -- ============================================================================
 -- CÓDIGO ÚNICO DE VINCULAÇÃO (v3)

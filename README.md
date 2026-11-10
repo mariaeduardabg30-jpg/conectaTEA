@@ -368,7 +368,9 @@ e-mail ou pelo **código de vinculação**:
   `user_id` com o mesmo e-mail e o vincula. Se o perfil for criado depois, o gatilho
   `link_dependent_account` faz o caminho inverso. Quando o dependente cria a conta antes, o
   responsável pode cadastrar o perfil com o mesmo e-mail: a função `claim_dependent_by_email`
-  reivindica o espaço existente (sem duplicar).
+  reivindica o espaço existente (sem duplicar). Tanto a função quanto o gatilho
+  `validate_dependent_email` conferem a conta em `profiles`/`auth.users`: e-mail sem conta de
+  dependente é recusado, inclusive na edição de um perfil.
 - **Por código:** a função `link_dependent_by_code(code)` reivindica o espaço do dependente a
   partir do código de 8 caracteres exibido na conta dele. Se o código estiver livre e a conta do
   responsável for de responsável, o espaço passa a pertencer a ele — sem precisar conhecer o

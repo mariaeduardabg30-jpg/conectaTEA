@@ -782,6 +782,14 @@ export function createDemoBackend(): Backend {
               account.email.toLowerCase() === email.toLowerCase(),
           )
         : undefined;
+
+      // Só aceita um e-mail que pertença a uma conta de dependente existente.
+      if (email && !linked) {
+        throw new Error(
+          "Não encontramos uma conta de dependente com este e-mail. Peça para a pessoa criar a conta em “Sou dependente → Criar conta” e tente novamente.",
+        );
+      }
+
       db.dependents[index] = {
         ...db.dependents[index],
         name: input.name,

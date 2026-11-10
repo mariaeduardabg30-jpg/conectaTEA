@@ -179,7 +179,7 @@ export function DependentFormModal({
           <p className="mt-1.5 text-xs leading-relaxed text-muted">
             {creating
               ? "A pessoa precisa ter criado a conta dela em “Sou dependente → Criar conta”, com este mesmo e-mail."
-              : "Se o dependente criar a conta dele com este e-mail, os dois acessos são vinculados."}
+              : "Para trocar o e-mail, ele precisa pertencer a uma conta de dependente já criada."}
           </p>
         </div>
 
