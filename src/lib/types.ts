@@ -58,6 +58,8 @@ export type HelpRequest = {
   createdAt: string;
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
+  /** Salvo no dispositivo sem conexão; será enviado quando a internet voltar. */
+  pending?: boolean;
 };
 
 export type AppUser = {

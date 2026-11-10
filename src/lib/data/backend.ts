@@ -104,4 +104,9 @@ export interface Backend {
    * da tarefa é criado pelo banco de dados (função agendada), com o app fechado.
    */
   checkTaskReminders?(): Promise<void>;
+  /**
+   * Opcional — envia as ações que ficaram salvas no dispositivo enquanto o app
+   * estava sem internet. Devolve quantas foram sincronizadas.
+   */
+  flushOfflineQueue?(): Promise<number>;
 }

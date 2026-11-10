@@ -13,6 +13,7 @@ export function HelpButton() {
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState<string | null>(null);
+  const [sentOffline, setSentOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!activeDependent) return null;
@@ -24,6 +25,7 @@ export function HelpButton() {
     try {
       const request = await backend.createHelpRequest(activeDependent.id);
       setConfirming(false);
+      setSentOffline(Boolean(request.pending));
       setSentAt(request.createdAt);
       void playConfirmationTone();
     } catch (cause) {
@@ -109,7 +111,7 @@ export function HelpButton() {
       <Modal
         open={sentAt !== null}
         onClose={() => setSentAt(null)}
-        title="Ajuda enviada"
+        title={sentOffline ? "Ajuda registrada" : "Ajuda enviada"}
         size="sm"
       >
         <div className="flex flex-col items-center py-2 text-center">
@@ -118,12 +120,13 @@ export function HelpButton() {
           </span>
           <h3 className="mt-5 font-display text-2xl font-black text-ink">Estamos com você</h3>
           <p className="mt-2 max-w-sm text-[0.98rem] leading-relaxed text-ink-soft">
-            Seu responsável foi avisado e vai até você. Se puder, respire fundo e espere um
-            pouquinho.
+            {sentOffline
+              ? "Seu pedido ficou salvo neste dispositivo. Assim que a internet voltar, o aviso será enviado ao seu responsável automaticamente. Se possível, procure alguém por perto agora."
+              : "Seu responsável foi avisado e vai até você. Se puder, respire fundo e espere um pouquinho."}
           </p>
           <p className="mt-4 inline-flex items-center gap-2 rounded-full bg-surface-2 px-3.5 py-1.5 text-xs font-bold text-muted">
             <HeartHandshake className="size-4" aria-hidden />
-            Pedido enviado às {formatTime(sentAt ?? new Date())}
+            {sentOffline ? "Pedido salvo às" : "Pedido enviado às"} {formatTime(sentAt ?? new Date())}
           </p>
           <button type="button" onClick={() => setSentAt(null)} className="btn-primary mt-6 w-full">
             Entendi

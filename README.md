@@ -150,12 +150,16 @@ computador ou aberto como um app, sem loja de aplicativos.
 
 ### O que funciona offline
 
-- A **tela de abertura da última página visitada** abre pelo cache.
-- Rotas ainda não visitadas mostram a página **“Você está sem conexão”**, com botão para tentar
-  novamente.
-- Ícones, logo e arquivos estáticos ficam em cache para o app abrir rápido.
-- **Os dados** (rotina, emoções, ajuda) continuam precisando de internet, porque ficam no Supabase
-  ou são sincronizados entre abas. Nenhum dado é apagado quando a conexão cai.
+- **Todas as telas** do app abrem pelo cache, inclusive as que ainda não foram visitadas.
+- **Rotina, emoções, pedidos de ajuda, notificações e perfis** aparecem com a última cópia
+  salva no dispositivo.
+- **Concluir atividades, registrar emoções, pedir ajuda e marcar notificações** continuam
+  funcionando sem conexão. As ações entram em uma fila local e são enviadas automaticamente
+  quando a internet volta.
+- A sessão salva é restaurada sem internet, então o app abre já na conta da pessoa.
+- Um aviso discreto informa quando o app está offline e quantas alterações aguardam envio.
+- Entrar, criar conta, editar a rotina/perfis e gerar códigos de vínculo ainda precisam de
+  internet (o app explica isso em vez de mostrar um erro técnico).
 
 ### Arquivos e funcionamento
 
@@ -492,9 +496,10 @@ Os componentes consomem apenas o contexto `AppProvider`, sem saber qual adaptado
   permissões e o modo silencioso do aparelho — em iPhone/iPad o push exige o app instalado na tela
   de início e o som pode ser suprimido pelo sistema.
 
-- **Offline:** a interface instalada abre pelo cache, mas o carregamento de rotina, emoções e
-  pedidos de ajuda depende de conexão com o Supabase. As telas visitadas continuam acessíveis e a
-  página “Sem conexão” orienta a tentar novamente.
+- **Offline:** as telas abrem pelo cache e mostram a última cópia salva de rotina, emoções e
+  pedidos de ajuda. Ações feitas sem conexão ficam em uma fila no dispositivo e são enviadas
+  automaticamente quando a internet volta. Só entram/criam conta, edições de rotina/perfis e
+  geração de códigos de vínculo exigem conexão.
 
 ---
 

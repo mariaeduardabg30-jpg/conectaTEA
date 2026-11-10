@@ -101,6 +101,10 @@
         margin-top: 16px;
         font-size: 0.8125rem;
       }
+      .hint a {
+        color: var(--primary);
+        font-weight: 700;
+      }
     </style>
   </head>
   <body>
@@ -110,14 +114,16 @@
       </div>
       <h1>Você está sem conexão</h1>
       <p>
-        O ConectaTEA precisa de internet para carregar seus dados. Suas
-        informações continuam salvas e voltam assim que a conexão retornar.
+        Esta tela ainda não foi salva neste dispositivo. As telas que você já
+        abriu continuam funcionando offline, com os dados salvos aqui. Assim que
+        a internet voltar, tudo é sincronizado automaticamente.
       </p>
       <button type="button" onclick="window.location.reload()">
         Tentar novamente
       </button>
       <p class="hint">
         Dica: verifique o Wi-Fi ou os dados móveis do seu dispositivo.
+        <a href="./">Voltar ao início do app</a>
       </p>
     </main>
   </body>

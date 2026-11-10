@@ -1,5 +1,18 @@
 import { getSupabase } from "@/lib/supabase/client";
 import type { AuthEvent, Backend, SignUpInput, SignUpResult } from "@/lib/data/backend";
+import {
+  OFFLINE_READ_MESSAGE,
+  cacheKey,
+  cacheRead,
+  cacheWrite,
+  isBrowserOffline,
+  isOfflineError,
+  localId,
+  outboxAdd,
+  outboxList,
+  outboxRemove,
+  type OfflineOperation,
+} from "@/lib/data/offline";
 import type {
   AppRole,
   AppUser,
@@ -38,6 +51,38 @@ type AuthUser = {
   email?: string | null;
   user_metadata?: Record<string, unknown>;
 };
+
+/**
+ * Lê a sessão salva pelo Supabase no próprio navegador, sem validar a
+ * expiração do token. É a reserva quando o app abre sem internet e o SDK
+ * não consegue renovar a sessão — sem isso a pessoa seria desconectada.
+ */
+function storedSessionUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  let exactKey = "";
+  try {
+    const host = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").hostname;
+    const ref = host.split(".")[0];
+    if (ref) exactKey = `sb-${ref}-auth-token`;
+  } catch {
+    // Sem URL válida: procura qualquer sessão do Supabase.
+  }
+  try {
+    const store = window.localStorage;
+    for (let index = 0; index < store.length; index += 1) {
+      const key = store.key(index);
+      if (!key || !key.endsWith("-auth-token")) continue;
+      if (exactKey ? key !== exactKey : !key.startsWith("sb-")) continue;
+      const raw = store.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as { user?: AuthUser } | null;
+      if (parsed?.user?.id) return parsed.user;
+    }
+  } catch {
+    // Valor inválido ou armazenamento bloqueado.
+  }
+  return null;
+}
 
 type ProfileRow = {
   role?: unknown;
@@ -188,6 +233,19 @@ function fail(error: { message: string } | null): never {
   throw new Error(error?.message ?? "Não foi possível concluir a operação.");
 }
 
+/** Troca a falha de rede por uma orientação clara em português. */
+async function runWhenOnline<T>(
+  action: () => Promise<T>,
+  message = "Você está offline. Conecte-se à internet para salvar esta alteração.",
+): Promise<T> {
+  try {
+    return await action();
+  } catch (cause) {
+    if (isOfflineError(cause)) throw new Error(message);
+    throw cause;
+  }
+}
+
 export function createSupabaseBackend(): Backend {
   const getClient = () => {
     const client = getSupabase();
@@ -195,7 +253,24 @@ export function createSupabaseBackend(): Backend {
     return client;
   };
 
+  /** Lê a sessão salva no dispositivo (não depende de internet). */
+  async function sessionUser(): Promise<AuthUser | null> {
+    const client = getClient();
+    try {
+      const { data } = await client.auth.getSession();
+      const user = (data.session?.user as AuthUser | undefined) ?? null;
+      if (user) return user;
+    } catch {
+      // Segue para a cópia salva no armazenamento local.
+    }
+    // Com o token expirado e sem internet, o SDK devolve sessão nula mesmo
+    // tendo a sessão salva. O registro local ainda identifica a conta.
+    return storedSessionUser();
+  }
+
   async function currentUserId(): Promise<string> {
+    const saved = await sessionUser();
+    if (saved) return saved.id;
     const client = getClient();
     const {
       data: { user },
@@ -252,19 +327,236 @@ export function createSupabaseBackend(): Backend {
   }
 
   async function loadUser(user: AuthUser): Promise<AppUser> {
+    const profileKey = cacheKey("profile", user.id);
+    const cachedProfile = cacheRead<AppUser>(profileKey);
+    // Sem internet não há como consultar o perfil: usa o que já está salvo.
+    if (isBrowserOffline()) return cachedProfile ?? mapUser(user);
+
     const client = getClient();
     try {
-      const { data } = await client
+      const { data, error } = await client
         .from("profiles")
         .select("role, name, age")
         .eq("id", user.id)
         .maybeSingle();
+      if (error) throw new Error(error.message);
       const mapped = mapUser(user, data as ProfileRow);
+      cacheWrite(profileKey, mapped);
       await syncTimeZone(user.id);
       return mapped;
     } catch {
-      // Sem acesso à tabela de perfis, o metadata ainda identifica a conta.
-      return mapUser(user);
+      // Sem internet (ou sem acesso à tabela de perfis), usa o último perfil
+      // salvo no dispositivo. O metadata do login é a reserva final.
+      return cachedProfile ?? mapUser(user);
+    }
+  }
+
+  function userCacheKey(userId: string, scope: string, ...parts: string[]): string {
+    return cacheKey(scope, userId, ...parts);
+  }
+
+  /**
+   * Lê do Supabase e guarda uma cópia local. Sem conexão, devolve a cópia.
+   * `merge` permite juntar janelas diferentes de tempo (semana atual, últimos
+   * dias) em uma única lista por dependente.
+   */
+  async function readWithCache<T>(
+    scope: string,
+    parts: string[],
+    fetcher: () => Promise<T>,
+    merge?: (fresh: T, cached: T | null) => T,
+  ): Promise<T> {
+    const userId = (await sessionUser())?.id ?? "anon";
+    const key = userCacheKey(userId, scope, ...parts);
+    const cached = cacheRead<T>(key);
+
+    if (isBrowserOffline()) {
+      if (cached !== null) return cached;
+      throw new Error(OFFLINE_READ_MESSAGE);
+    }
+
+    try {
+      const fresh = await fetcher();
+      cacheWrite(key, merge ? merge(fresh, cached) : fresh);
+      return fresh;
+    } catch (cause) {
+      if (isOfflineError(cause)) {
+        if (cached !== null) return cached;
+        throw new Error(OFFLINE_READ_MESSAGE);
+      }
+      throw cause;
+    }
+  }
+
+  async function queueOperation(op: OfflineOperation): Promise<string> {
+    const user = await sessionUser();
+    if (!user) throw new Error("Sua sessão expirou. Entre novamente.");
+    outboxAdd(user.id, op);
+    return user.id;
+  }
+
+  async function cacheCompletion(
+    userId: string,
+    dependentId: string,
+    routineItemId: string,
+    date: string,
+    done: boolean,
+  ): Promise<void> {
+    const key = userCacheKey(userId, "completions", dependentId);
+    const current = cacheRead<TaskCompletion[]>(key);
+    if (current === null) return;
+    const without = current.filter(
+      (item) => !(item.routineItemId === routineItemId && item.date === date),
+    );
+    cacheWrite(
+      key,
+      done
+        ? [
+            ...without,
+            {
+              id: localId("completion"),
+              dependentId,
+              routineItemId,
+              date,
+              completedAt: new Date().toISOString(),
+            },
+          ]
+        : without,
+    );
+  }
+
+  async function cacheEmotion(
+    userId: string,
+    log: EmotionLog,
+    replaceId?: string,
+  ): Promise<void> {
+    const key = userCacheKey(userId, "emotions", log.dependentId);
+    const current = cacheRead<EmotionLog[]>(key);
+    if (current === null) return;
+    cacheWrite(
+      key,
+      [
+        log,
+        ...current.filter(
+          (item) => item.id !== log.id && (!replaceId || item.id !== replaceId),
+        ),
+      ].slice(0, 500),
+    );
+  }
+
+  async function cacheHelp(
+    userId: string,
+    request: HelpRequest,
+    replaceId?: string,
+  ): Promise<void> {
+    // A lista "todos" alimenta a tela do responsável; a lista por dependente
+    // alimenta a tela de quem pediu. Atualiza as duas quando existirem.
+    for (const scope of ["all", request.dependentId]) {
+      if (!scope) continue;
+      const key = userCacheKey(userId, "help", scope);
+      const current = cacheRead<HelpRequest[]>(key);
+      if (current === null) continue;
+      const next = [
+        request,
+        ...current.filter(
+          (item) => item.id !== request.id && (!replaceId || item.id !== replaceId),
+        ),
+      ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      cacheWrite(key, next);
+    }
+  }
+
+  async function cacheNotifications(
+    userId: string,
+    update: (current: AppNotification[]) => AppNotification[],
+  ): Promise<void> {
+    const key = userCacheKey(userId, "notifications");
+    const current = cacheRead<AppNotification[]>(key);
+    if (current === null) return;
+    cacheWrite(key, update(current));
+  }
+
+  /** Reenvia uma ação salva sem passar de novo pela fila. */
+  async function replayOperation(op: OfflineOperation, userId: string): Promise<void> {
+    const client = getClient();
+    switch (op.kind) {
+      case "completion": {
+        if (op.done) {
+          const { error } = await client.from("task_completions").upsert(
+            {
+              dependent_id: op.dependentId,
+              routine_item_id: op.routineItemId,
+              completion_date: op.date,
+            },
+            { onConflict: "routine_item_id,completion_date" },
+          );
+          if (error) fail(error);
+        } else {
+          const { error } = await client
+            .from("task_completions")
+            .delete()
+            .eq("routine_item_id", op.routineItemId)
+            .eq("completion_date", op.date);
+          if (error) fail(error);
+        }
+        await cacheCompletion(userId, op.dependentId, op.routineItemId, op.date, op.done);
+        return;
+      }
+      case "emotion": {
+        const { data, error } = await client
+          .from("emotion_logs")
+          .insert({
+            dependent_id: op.dependentId,
+            emotion: op.emotion,
+            intensity: op.intensity,
+            note: op.note,
+          })
+          .select("*")
+          .single();
+        if (error) fail(error);
+        // Troca o registro temporário pelo registro oficial.
+        await cacheEmotion(userId, mapEmotion(data as Row), op.localId);
+        return;
+      }
+      case "help_request": {
+        const { data, error } = await client
+          .from("help_requests")
+          .insert({ dependent_id: op.dependentId, message: op.message })
+          .select("*")
+          .single();
+        if (error) fail(error);
+        void dispatchPush({ table: "help_requests", record: data as Row });
+        await cacheHelp(userId, mapHelpRequest(data as Row), op.localId);
+        return;
+      }
+      case "help_ack": {
+        const { data, error } = await client
+          .from("help_requests")
+          .update({ acknowledged_at: op.at, acknowledged_by: op.byName })
+          .eq("id", op.id)
+          .select("*")
+          .single();
+        if (error) fail(error);
+        await cacheHelp(userId, mapHelpRequest(data as Row));
+        return;
+      }
+      case "notification_read": {
+        const { error } = await client
+          .from("notifications")
+          .update({ read_at: new Date().toISOString() })
+          .eq("id", op.id)
+          .is("read_at", null);
+        if (error) fail(error);
+        return;
+      }
+      case "notifications_read_all": {
+        const { error } = await client
+          .from("notifications")
+          .update({ read_at: new Date().toISOString() })
+          .is("read_at", null);
+        if (error) fail(error);
+        return;
+      }
     }
   }
 
@@ -272,9 +564,19 @@ export function createSupabaseBackend(): Backend {
     mode: "supabase",
 
     async getUser() {
-      const client = getClient();
-      const { data } = await client.auth.getUser();
-      return data.user ? loadUser(data.user) : null;
+      if (!isBrowserOffline()) {
+        const client = getClient();
+        try {
+          const { data, error } = await client.auth.getUser();
+          if (data.user) return await loadUser(data.user);
+          if (error && !isOfflineError(error)) return null;
+        } catch (cause) {
+          if (!isOfflineError(cause)) return null;
+        }
+      }
+      // Sem internet, a sessão salva no dispositivo continua valendo.
+      const saved = await sessionUser();
+      return saved ? loadUser(saved) : null;
     },
 
     onAuthChange(callback) {
@@ -296,6 +598,16 @@ export function createSupabaseBackend(): Backend {
                       : "other";
         const current = session?.user;
         if (!current) {
+          // Sem internet, o SDK pode emitir sessão nula ao não conseguir
+          // renovar o token. A sessão salva no dispositivo continua valendo.
+          const stored = kind === "signed_out" ? null : storedSessionUser();
+          if (stored) {
+            void loadUser(stored).then(
+              (user) => callback(user, kind),
+              () => callback(mapUser(stored), kind),
+            );
+            return;
+          }
           callback(null, kind);
           return;
         }
@@ -308,6 +620,9 @@ export function createSupabaseBackend(): Backend {
     },
 
     async signIn(email, password) {
+      if (isBrowserOffline()) {
+        throw new Error("Você está offline. Conecte-se à internet para entrar na conta.");
+      }
       const client = getClient();
       const { data, error } = await client.auth.signInWithPassword({ email, password });
       if (error) fail(error);
@@ -316,6 +631,9 @@ export function createSupabaseBackend(): Backend {
     },
 
     async signUp(input: SignUpInput): Promise<SignUpResult> {
+      if (isBrowserOffline()) {
+        throw new Error("Você está offline. Conecte-se à internet para criar a conta.");
+      }
       const client = getClient();
       const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
       const { data, error } = await client.auth.signUp({
@@ -343,10 +661,18 @@ export function createSupabaseBackend(): Backend {
 
     async signOut() {
       const client = getClient();
-      await client.auth.signOut();
+      try {
+        // Sem internet, encerra apenas neste dispositivo em vez de falhar.
+        await client.auth.signOut({ scope: isBrowserOffline() ? "local" : "global" });
+      } catch {
+        await client.auth.signOut({ scope: "local" });
+      }
     },
 
     async requestPasswordReset(email) {
+      if (isBrowserOffline()) {
+        throw new Error("Você está offline. Conecte-se à internet para solicitar o e-mail.");
+      }
       const client = getClient();
       // O link do e-mail volta para a tela de definição de nova senha. O
       // basePath é necessário quando o app roda em um subdiretório.
@@ -360,256 +686,484 @@ export function createSupabaseBackend(): Backend {
     },
 
     async updatePassword(password) {
+      if (isBrowserOffline()) {
+        throw new Error("Você está offline. Conecte-se à internet para alterar a senha.");
+      }
       const client = getClient();
       const { error } = await client.auth.updateUser({ password });
       if (error) fail(error);
     },
 
     async listDependents() {
-      const client = getClient();
-      const { data, error } = await client
-        .from("dependents")
-        .select("*")
-        .order("created_at", { ascending: true });
-      if (error) fail(error);
-      return ((data ?? []) as Row[]).map(mapDependent);
+      return readWithCache<Dependent[]>("dependents", [], async () => {
+        const client = getClient();
+        const { data, error } = await client
+          .from("dependents")
+          .select("*")
+          .order("created_at", { ascending: true });
+        if (error) fail(error);
+        return ((data ?? []) as Row[]).map(mapDependent);
+      });
     },
 
     async createDependent(input: DependentInput) {
-      const client = getClient();
-      const email = input.email?.trim() || null;
-      if (!email) {
-        throw new Error(
-          "Informe o e-mail da conta do dependente. Só é possível adicionar quem já criou a conta.",
-        );
-      }
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const email = input.email?.trim() || null;
+        if (!email) {
+          throw new Error(
+            "Informe o e-mail da conta do dependente. Só é possível adicionar quem já criou a conta.",
+          );
+        }
 
-      const details = {
-        name: input.name,
-        avatar: input.avatar,
-        color: input.color,
-        email,
-        age: input.age,
-      };
-
-      // A RPC confere se a conta do dependente existe de verdade e reivindica
-      // o espaço dele. Chamar sempre (mesmo já vinculado) evita reaproveitar
-      // um perfil antigo cujo e-mail não tem mais conta.
-      const { data: claimed, error: claimError } = await client.rpc(
-        "claim_dependent_by_email",
-        { target_email: email },
-      );
-      const missingFunction =
-        claimError?.code === "PGRST202" ||
-        /could not find the function|does not exist|schema cache/i.test(
-          claimError?.message ?? "",
-        );
-      if (missingFunction) {
-        throw new Error(
-          "Atualize o banco de dados com o arquivo supabase/schema.sql para adicionar dependentes existentes.",
-        );
-      }
-      if (claimError) fail(claimError);
-
-      const row = (Array.isArray(claimed) ? claimed[0] : claimed) as Row | null;
-      if (!row?.id) {
-        throw new Error(
-          "Não encontramos uma conta de dependente disponível com este e-mail. Confira se a pessoa já criou a conta como dependente ou se ela já não está vinculada a outro responsável.",
-        );
-      }
-
-      const { data, error } = await client
-        .from("dependents")
-        .update(details)
-        .eq("id", text(row.id))
-        .select("*")
-        .single();
-      if (error) fail(error);
-      return mapDependent(data as Row);
-    },
-
-    async updateDependent(id, input) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("dependents")
-        .update({
+        const details = {
           name: input.name,
           avatar: input.avatar,
           color: input.color,
-          email: input.email,
+          email,
           age: input.age,
-        })
-        .eq("id", id)
-        .select("*")
-        .single();
-      if (error) {
-        if (/dependents_email_unique|duplicate key/i.test(error.message)) {
-          throw new Error("Já existe outro perfil com este e-mail.");
+        };
+
+        // A RPC confere se a conta do dependente existe de verdade e reivindica
+        // o espaço dele. Chamar sempre (mesmo já vinculado) evita reaproveitar
+        // um perfil antigo cujo e-mail não tem mais conta.
+        const { data: claimed, error: claimError } = await client.rpc(
+          "claim_dependent_by_email",
+          { target_email: email },
+        );
+        const missingFunction =
+          claimError?.code === "PGRST202" ||
+          /could not find the function|does not exist|schema cache/i.test(
+            claimError?.message ?? "",
+          );
+        if (missingFunction) {
+          throw new Error(
+            "Atualize o banco de dados com o arquivo supabase/schema.sql para adicionar dependentes existentes.",
+          );
         }
-        fail(error);
-      }
-      return mapDependent(data as Row);
+        if (claimError) fail(claimError);
+
+        const row = (Array.isArray(claimed) ? claimed[0] : claimed) as Row | null;
+        if (!row?.id) {
+          throw new Error(
+            "Não encontramos uma conta de dependente disponível com este e-mail. Confira se a pessoa já criou a conta como dependente ou se ela já não está vinculada a outro responsável.",
+          );
+        }
+
+        const { data, error } = await client
+          .from("dependents")
+          .update(details)
+          .eq("id", text(row.id))
+          .select("*")
+          .single();
+        if (error) fail(error);
+        return mapDependent(data as Row);
+      }, "Você está offline. Conecte-se à internet para adicionar um dependente.");
+    },
+
+    async updateDependent(id, input) {
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const { data, error } = await client
+          .from("dependents")
+          .update({
+            name: input.name,
+            avatar: input.avatar,
+            color: input.color,
+            email: input.email,
+            age: input.age,
+          })
+          .eq("id", id)
+          .select("*")
+          .single();
+        if (error) {
+          if (/dependents_email_unique|duplicate key/i.test(error.message)) {
+            throw new Error("Já existe outro perfil com este e-mail.");
+          }
+          fail(error);
+        }
+        return mapDependent(data as Row);
+      }, "Você está offline. Conecte-se à internet para editar o perfil.");
     },
 
     async deleteDependent(id) {
-      const client = getClient();
-      const { error } = await client.from("dependents").delete().eq("id", id);
-      if (error) fail(error);
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const { error } = await client.from("dependents").delete().eq("id", id);
+        if (error) fail(error);
+      }, "Você está offline. Conecte-se à internet para remover o perfil.");
     },
 
     async listRoutineItems(dependentId) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("routine_items")
-        .select("*")
-        .eq("dependent_id", dependentId)
-        .order("start_time", { ascending: true });
-      if (error) fail(error);
-      return ((data ?? []) as Row[]).map(mapRoutineItem);
+      return readWithCache<RoutineItem[]>("routine", [dependentId], async () => {
+        const client = getClient();
+        const { data, error } = await client
+          .from("routine_items")
+          .select("*")
+          .eq("dependent_id", dependentId)
+          .order("start_time", { ascending: true });
+        if (error) fail(error);
+        return ((data ?? []) as Row[]).map(mapRoutineItem);
+      });
     },
 
     async createRoutineItem(dependentId, input) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("routine_items")
-        .insert({
-          dependent_id: dependentId,
-          title: input.title,
-          emoji: input.emoji,
-          start_time: input.startTime,
-          days: input.days,
-          duration_min: input.durationMin,
-        })
-        .select("*")
-        .single();
-      if (error) fail(error);
-      return mapRoutineItem(data as Row);
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const { data, error } = await client
+          .from("routine_items")
+          .insert({
+            dependent_id: dependentId,
+            title: input.title,
+            emoji: input.emoji,
+            start_time: input.startTime,
+            days: input.days,
+            duration_min: input.durationMin,
+          })
+          .select("*")
+          .single();
+        if (error) fail(error);
+        return mapRoutineItem(data as Row);
+      });
     },
 
     async updateRoutineItem(id, input) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("routine_items")
-        .update({
-          title: input.title,
-          emoji: input.emoji,
-          start_time: input.startTime,
-          days: input.days,
-          duration_min: input.durationMin,
-        })
-        .eq("id", id)
-        .select("*")
-        .single();
-      if (error) fail(error);
-      return mapRoutineItem(data as Row);
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const { data, error } = await client
+          .from("routine_items")
+          .update({
+            title: input.title,
+            emoji: input.emoji,
+            start_time: input.startTime,
+            days: input.days,
+            duration_min: input.durationMin,
+          })
+          .eq("id", id)
+          .select("*")
+          .single();
+        if (error) fail(error);
+        return mapRoutineItem(data as Row);
+      });
     },
 
     async deleteRoutineItem(id) {
-      const client = getClient();
-      const { error } = await client.from("routine_items").delete().eq("id", id);
-      if (error) fail(error);
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const { error } = await client.from("routine_items").delete().eq("id", id);
+        if (error) fail(error);
+      });
     },
 
     async listCompletions(dependentId, from, to) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("task_completions")
-        .select("*")
-        .eq("dependent_id", dependentId)
-        .gte("completion_date", from)
-        .lte("completion_date", to);
-      if (error) fail(error);
-      return ((data ?? []) as Row[]).map(mapCompletion);
+      const all = await readWithCache<TaskCompletion[]>(
+        "completions",
+        [dependentId],
+        async () => {
+          const client = getClient();
+          const { data, error } = await client
+            .from("task_completions")
+            .select("*")
+            .eq("dependent_id", dependentId)
+            .gte("completion_date", from)
+            .lte("completion_date", to);
+          if (error) fail(error);
+          return ((data ?? []) as Row[]).map(mapCompletion);
+        },
+        (fresh, cached) => {
+          // O período consultado é a fonte da verdade (inclusive remoções),
+          // mas uma conclusão feita offline ainda na fila precisa continuar
+          // aparecendo até ser enviada.
+          const queued = outboxList().filter(
+            (item) => item.op.kind === "completion" && item.op.done,
+          );
+          const isPending = (item: TaskCompletion) =>
+            item.id.startsWith("local-") &&
+            queued.some(
+              (entry) =>
+                entry.op.kind === "completion" &&
+                entry.op.dependentId === item.dependentId &&
+                entry.op.routineItemId === item.routineItemId &&
+                entry.op.date === item.date,
+            );
+          const freshKeys = new Set(
+            fresh.map((item) => `${item.routineItemId}:${item.date}`),
+          );
+          const kept = (cached ?? []).filter(
+            (item) => item.date < from || item.date > to,
+          );
+          const pending = (cached ?? []).filter(
+            (item) =>
+              item.date >= from &&
+              item.date <= to &&
+              isPending(item) &&
+              !freshKeys.has(`${item.routineItemId}:${item.date}`),
+          );
+          return [...kept, ...pending, ...fresh];
+        },
+      );
+      return all.filter((item) => item.date >= from && item.date <= to);
     },
 
     async setCompletion(dependentId, routineItemId, date, done) {
-      const client = getClient();
-      if (done) {
-        const { error } = await client.from("task_completions").upsert(
-          {
-            dependent_id: dependentId,
-            routine_item_id: routineItemId,
-            completion_date: date,
-          },
-          { onConflict: "routine_item_id,completion_date" },
-        );
-        if (error) fail(error);
+      const queueLocally = async () => {
+        const userId = await queueOperation({
+          kind: "completion",
+          dependentId,
+          routineItemId,
+          date,
+          done,
+        });
+        await cacheCompletion(userId, dependentId, routineItemId, date, done);
+      };
+
+      if (isBrowserOffline()) {
+        await queueLocally();
         return;
       }
-      const { error } = await client
-        .from("task_completions")
-        .delete()
-        .eq("routine_item_id", routineItemId)
-        .eq("completion_date", date);
-      if (error) fail(error);
+
+      const client = getClient();
+      try {
+        if (done) {
+          const { error } = await client.from("task_completions").upsert(
+            {
+              dependent_id: dependentId,
+              routine_item_id: routineItemId,
+              completion_date: date,
+            },
+            { onConflict: "routine_item_id,completion_date" },
+          );
+          if (error) fail(error);
+        } else {
+          const { error } = await client
+            .from("task_completions")
+            .delete()
+            .eq("routine_item_id", routineItemId)
+            .eq("completion_date", date);
+          if (error) fail(error);
+        }
+      } catch (cause) {
+        if (isOfflineError(cause)) {
+          await queueLocally();
+          return;
+        }
+        throw cause;
+      }
+
+      const userId = (await sessionUser())?.id;
+      if (userId) await cacheCompletion(userId, dependentId, routineItemId, date, done);
     },
 
     async listEmotions(dependentId, fromIso) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("emotion_logs")
-        .select("*")
-        .eq("dependent_id", dependentId)
-        .gte("created_at", fromIso)
-        .order("created_at", { ascending: false });
-      if (error) fail(error);
-      return ((data ?? []) as Row[]).map(mapEmotion);
+      const all = await readWithCache<EmotionLog[]>(
+        "emotions",
+        [dependentId],
+        async () => {
+          const client = getClient();
+          const { data, error } = await client
+            .from("emotion_logs")
+            .select("*")
+            .eq("dependent_id", dependentId)
+            .gte("created_at", fromIso)
+            .order("created_at", { ascending: false });
+          if (error) fail(error);
+          return ((data ?? []) as Row[]).map(mapEmotion);
+        },
+        (fresh, cached) => {
+          // Mantém o histórico anterior salvo no dispositivo, além do período,
+          // e os registros feitos offline que ainda estão na fila.
+          const queuedIds = new Set(
+            outboxList()
+              .filter((item) => item.op.kind === "emotion")
+              .map((item) => (item.op.kind === "emotion" ? item.op.localId : undefined))
+              .filter((id): id is string => Boolean(id)),
+          );
+          const older = (cached ?? []).filter((item) => item.createdAt < fromIso);
+          const pending = (cached ?? []).filter(
+            (item) => item.createdAt >= fromIso && queuedIds.has(item.id),
+          );
+          return [...pending, ...fresh, ...older].slice(0, 500);
+        },
+      );
+      return all.filter((item) => item.createdAt >= fromIso);
     },
 
     async createEmotion(dependentId, input) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("emotion_logs")
-        .insert({
-          dependent_id: dependentId,
+      const saveLocally = async (): Promise<EmotionLog> => {
+        const log: EmotionLog = {
+          id: localId("emotion"),
+          dependentId,
           emotion: input.emotion,
           intensity: input.intensity,
           note: input.note,
-        })
-        .select("*")
-        .single();
-      if (error) fail(error);
-      return mapEmotion(data as Row);
+          createdAt: new Date().toISOString(),
+        };
+        const userId = await queueOperation({
+          kind: "emotion",
+          dependentId,
+          emotion: input.emotion,
+          intensity: input.intensity,
+          note: input.note,
+          localId: log.id,
+        });
+        await cacheEmotion(userId, log);
+        return log;
+      };
+
+      if (isBrowserOffline()) return saveLocally();
+
+      try {
+        const client = getClient();
+        const { data, error } = await client
+          .from("emotion_logs")
+          .insert({
+            dependent_id: dependentId,
+            emotion: input.emotion,
+            intensity: input.intensity,
+            note: input.note,
+          })
+          .select("*")
+          .single();
+        if (error) fail(error);
+        const created = mapEmotion(data as Row);
+        const userId = (await sessionUser())?.id;
+        if (userId) await cacheEmotion(userId, created);
+        return created;
+      } catch (cause) {
+        if (isOfflineError(cause)) return saveLocally();
+        throw cause;
+      }
     },
 
     async listHelpRequests(dependentId) {
-      const client = getClient();
-      let query = client
-        .from("help_requests")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(100);
-      if (dependentId) query = query.eq("dependent_id", dependentId);
-      const { data, error } = await query;
-      if (error) fail(error);
-      return ((data ?? []) as Row[]).map(mapHelpRequest);
+      return readWithCache<HelpRequest[]>(
+        "help",
+        [dependentId ?? "all"],
+        async () => {
+          const client = getClient();
+          let query = client
+            .from("help_requests")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(100);
+          if (dependentId) query = query.eq("dependent_id", dependentId);
+          const { data, error } = await query;
+          if (error) fail(error);
+          return ((data ?? []) as Row[]).map(mapHelpRequest);
+        },
+        (fresh, cached) => {
+          // Pedidos criados ou reconhecidos offline continuam visíveis até a
+          // fila ser enviada.
+          const queuedIds = new Set<string>();
+          for (const item of outboxList()) {
+            if (item.op.kind === "help_request" && item.op.localId) {
+              queuedIds.add(item.op.localId);
+            }
+            if (item.op.kind === "help_ack") queuedIds.add(item.op.id);
+          }
+          const pending = (cached ?? []).filter(
+            (item) => item.pending && queuedIds.has(item.id),
+          );
+          const pendingIds = new Set(pending.map((item) => item.id));
+          return [
+            ...pending,
+            ...fresh.filter((item) => !pendingIds.has(item.id)),
+          ];
+        },
+      );
     },
 
     async createHelpRequest(dependentId, message) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("help_requests")
-        .insert({ dependent_id: dependentId, message: message ?? null })
-        .select("*")
-        .single();
-      if (error) fail(error);
-      const row = data as Row;
-      // O app do dependente está aberto neste momento, então ele consegue
-      // acionar o push mesmo que o responsável esteja com o app fechado.
-      void dispatchPush({ table: "help_requests", record: row });
-      return mapHelpRequest(row);
+      const saveLocally = async (): Promise<HelpRequest> => {
+        const request: HelpRequest = {
+          id: localId("help"),
+          dependentId,
+          message: message ?? null,
+          createdAt: new Date().toISOString(),
+          acknowledgedAt: null,
+          acknowledgedBy: null,
+          pending: true,
+        };
+        const userId = await queueOperation({
+          kind: "help_request",
+          dependentId,
+          message: message ?? null,
+          localId: request.id,
+        });
+        await cacheHelp(userId, request);
+        return request;
+      };
+
+      if (isBrowserOffline()) return saveLocally();
+
+      try {
+        const client = getClient();
+        const { data, error } = await client
+          .from("help_requests")
+          .insert({ dependent_id: dependentId, message: message ?? null })
+          .select("*")
+          .single();
+        if (error) fail(error);
+        const row = data as Row;
+        // O app do dependente está aberto neste momento, então ele consegue
+        // acionar o push mesmo que o responsável esteja com o app fechado.
+        void dispatchPush({ table: "help_requests", record: row });
+        const request = mapHelpRequest(row);
+        const userId = (await sessionUser())?.id;
+        if (userId) await cacheHelp(userId, request);
+        return request;
+      } catch (cause) {
+        if (isOfflineError(cause)) return saveLocally();
+        throw cause;
+      }
     },
 
     async acknowledgeHelpRequest(id, byName) {
-      const client = getClient();
-      const { data, error } = await client
-        .from("help_requests")
-        .update({ acknowledged_at: new Date().toISOString(), acknowledged_by: byName })
-        .eq("id", id)
-        .select("*")
-        .single();
-      if (error) fail(error);
-      return mapHelpRequest(data as Row);
+      const acknowledgeLocally = async (): Promise<HelpRequest> => {
+        const at = new Date().toISOString();
+        const userId = await queueOperation({ kind: "help_ack", id, byName, at });
+        const cached = cacheRead<HelpRequest[]>(userCacheKey(userId, "help", "all")) ?? [];
+        const existing = cached.find((item) => item.id === id);
+        if (!existing) {
+          return {
+            id,
+            dependentId: "",
+            message: null,
+            createdAt: at,
+            acknowledgedAt: at,
+            acknowledgedBy: byName,
+            pending: true,
+          };
+        }
+        const request: HelpRequest = {
+          ...existing,
+          acknowledgedAt: at,
+          acknowledgedBy: byName,
+          pending: true,
+        };
+        await cacheHelp(userId, request);
+        return request;
+      };
+
+      if (isBrowserOffline()) return acknowledgeLocally();
+
+      try {
+        const client = getClient();
+        const { data, error } = await client
+          .from("help_requests")
+          .update({ acknowledged_at: new Date().toISOString(), acknowledged_by: byName })
+          .eq("id", id)
+          .select("*")
+          .single();
+        if (error) fail(error);
+        const request = mapHelpRequest(data as Row);
+        const userId = (await sessionUser())?.id;
+        if (userId) await cacheHelp(userId, request);
+        return request;
+      } catch (cause) {
+        if (isOfflineError(cause)) return acknowledgeLocally();
+        throw cause;
+      }
     },
 
     subscribeHelpRequests(callback: HelpSubscription) {
@@ -633,56 +1187,108 @@ export function createSupabaseBackend(): Backend {
     },
 
     async linkDependentByCode(code) {
-      const client = getClient();
-      const { data, error } = await client.rpc("link_dependent_by_code", {
-        target_code: code,
-      });
-      if (error) linkError(error);
-      const row = (Array.isArray(data) ? data[0] : data) as Row | null;
-      if (!row?.id) linkError({ message: "Código inválido ou não encontrado." });
-      return mapDependent(row);
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const { data, error } = await client.rpc("link_dependent_by_code", {
+          target_code: code,
+        });
+        if (error) linkError(error);
+        const row = (Array.isArray(data) ? data[0] : data) as Row | null;
+        if (!row?.id) linkError({ message: "Código inválido ou não encontrado." });
+        return mapDependent(row);
+      }, "Você está offline. Conecte-se à internet para vincular um dependente.");
     },
 
     async regenerateLinkCode(dependentId) {
-      const client = getClient();
-      const { data, error } = await client.rpc("regenerate_link_code", {
-        target_dependent_id: dependentId,
-      });
-      if (error) linkError(error);
-      if (typeof data !== "string" || data.length === 0) {
-        throw new Error("Não foi possível gerar um novo código.");
-      }
-      return data;
+      return runWhenOnline(async () => {
+        const client = getClient();
+        const { data, error } = await client.rpc("regenerate_link_code", {
+          target_dependent_id: dependentId,
+        });
+        if (error) linkError(error);
+        if (typeof data !== "string" || data.length === 0) {
+          throw new Error("Não foi possível gerar um novo código.");
+        }
+        return data;
+      }, "Você está offline. Conecte-se à internet para gerar um novo código.");
     },
 
     async listNotifications() {
-      const client = getClient();
-      const { data, error } = await client
-        .from("notifications")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (error) fail(error);
-      return ((data ?? []) as Row[]).map(mapNotification);
+      return readWithCache<AppNotification[]>("notifications", [], async () => {
+        const client = getClient();
+        const { data, error } = await client
+          .from("notifications")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (error) fail(error);
+        return ((data ?? []) as Row[]).map(mapNotification);
+      });
     },
 
     async markNotificationRead(id) {
-      const client = getClient();
-      const { error } = await client
-        .from("notifications")
-        .update({ read_at: new Date().toISOString() })
-        .eq("id", id)
-        .is("read_at", null);
-      if (error) fail(error);
+      const readAt = new Date().toISOString();
+      const markLocally = async () => {
+        const userId = await queueOperation({ kind: "notification_read", id });
+        await cacheNotifications(userId, (current) =>
+          current.map((item) =>
+            item.id === id && !item.readAt ? { ...item, readAt } : item,
+          ),
+        );
+      };
+
+      if (isBrowserOffline()) return markLocally();
+
+      try {
+        const client = getClient();
+        const { error } = await client
+          .from("notifications")
+          .update({ read_at: readAt })
+          .eq("id", id)
+          .is("read_at", null);
+        if (error) fail(error);
+      } catch (cause) {
+        if (isOfflineError(cause)) return markLocally();
+        throw cause;
+      }
+      const userId = (await sessionUser())?.id;
+      if (userId) {
+        await cacheNotifications(userId, (current) =>
+          current.map((item) =>
+            item.id === id && !item.readAt ? { ...item, readAt } : item,
+          ),
+        );
+      }
     },
 
     async markAllNotificationsRead() {
-      const client = getClient();
-      const { error } = await client
-        .from("notifications")
-        .update({ read_at: new Date().toISOString() })
-        .is("read_at", null);
-      if (error) fail(error);
+      const readAt = new Date().toISOString();
+      const markLocally = async () => {
+        const userId = await queueOperation({ kind: "notifications_read_all" });
+        await cacheNotifications(userId, (current) =>
+          current.map((item) => (item.readAt ? item : { ...item, readAt })),
+        );
+      };
+
+      if (isBrowserOffline()) return markLocally();
+
+      try {
+        const client = getClient();
+        const { error } = await client
+          .from("notifications")
+          .update({ read_at: readAt })
+          .is("read_at", null);
+        if (error) fail(error);
+      } catch (cause) {
+        if (isOfflineError(cause)) return markLocally();
+        throw cause;
+      }
+      const userId = (await sessionUser())?.id;
+      if (userId) {
+        await cacheNotifications(userId, (current) =>
+          current.map((item) => (item.readAt ? item : { ...item, readAt })),
+        );
+      }
     },
 
     subscribeNotifications(callback) {
@@ -748,11 +1354,38 @@ export function createSupabaseBackend(): Backend {
     },
 
     /**
+     * Envia as ações salvas enquanto o app estava sem internet, na ordem em
+     * que foram feitas. Para na primeira falha de rede e tenta de novo na
+     * próxima reconexão.
+     */
+    async flushOfflineQueue() {
+      if (isBrowserOffline()) return 0;
+      const userId = (await sessionUser())?.id;
+      if (!userId) return 0;
+      const queued = outboxList().filter((item) => item.userId === userId);
+      let sent = 0;
+      for (const item of queued) {
+        try {
+          await replayOperation(item.op, userId);
+          outboxRemove(item.id);
+          sent += 1;
+        } catch (cause) {
+          if (isOfflineError(cause)) break;
+          // Ação inválida (registro removido, permissão etc.): descarta para
+          // não travar as próximas da fila.
+          outboxRemove(item.id);
+        }
+      }
+      return sent;
+    },
+
+    /**
      * Dispara os lembretes do horário pelo banco. Funciona como reforço do
      * pg_cron (e substituto quando ele não está ativo), sempre limitado à
      * própria conta pela função `run_my_task_reminders`.
      */
     async checkTaskReminders() {
+      if (isBrowserOffline()) return;
       const client = getClient();
       const { error } = await client.rpc("run_my_task_reminders");
       if (!error) return;

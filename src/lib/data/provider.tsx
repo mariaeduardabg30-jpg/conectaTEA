@@ -159,23 +159,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [backend, resetSignedOut]);
 
   const loadDependents = useCallback(async () => {
-    const list = await backend.listDependents();
-    setDependents(list);
-    setActiveId((previous) => {
-      const stored =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem(ACTIVE_DEPENDENT_KEY)
-          : null;
-      const candidate = previous ?? stored;
-      const next = list.some((dependent) => dependent.id === candidate)
-        ? candidate
-        : (list[0]?.id ?? null);
-      if (next && typeof window !== "undefined") {
-        window.localStorage.setItem(ACTIVE_DEPENDENT_KEY, next);
-      }
-      return next;
-    });
-    setDependentsLoaded(true);
+    try {
+      const list = await backend.listDependents();
+      setDependents(list);
+      setActiveId((previous) => {
+        const stored =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(ACTIVE_DEPENDENT_KEY)
+            : null;
+        const candidate = previous ?? stored;
+        const next = list.some((dependent) => dependent.id === candidate)
+          ? candidate
+          : (list[0]?.id ?? null);
+        if (next && typeof window !== "undefined") {
+          window.localStorage.setItem(ACTIVE_DEPENDENT_KEY, next);
+        }
+        return next;
+      });
+    } catch {
+      // Offline sem cópia salva: mantém a lista atual em vez de apagar tudo.
+    } finally {
+      setDependentsLoaded(true);
+    }
   }, [backend]);
 
   const refreshDependents = useCallback(async () => {
@@ -205,9 +210,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const list = await backend.listNotifications();
       setNotifications(list);
     } catch {
-      setNotifications([]);
+      // Mantém a última lista conhecida (inclusive a salva para uso offline).
     }
   }, [backend]);
+
+  /**
+   * Reenvia o que foi feito sem internet e recarrega os dados quando a
+   * conexão volta. Também roda ao abrir o app, caso ele tenha sido fechado
+   * antes de sincronizar.
+   */
+  const syncPendingWrites = useCallback(async () => {
+    const flush = backend.flushOfflineQueue;
+    if (!flush) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    try {
+      const sent = await flush();
+      if (sent === 0) return;
+      await loadDependents();
+      await loadNotifications();
+      setDataSignal((value) => value + 1);
+      setHelpSignal((value) => value + 1);
+    } catch {
+      // Tenta novamente na próxima reconexão.
+    }
+  }, [backend, loadDependents, loadNotifications]);
 
   useEffect(() => {
     if (!user) return;
@@ -219,6 +245,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [user, loadNotifications]);
+
+  // Sincroniza a fila offline ao abrir o app e sempre que a internet volta.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    // Fora do corpo do efeito para evitar atualizações síncronas em cascata.
+    queueMicrotask(() => {
+      if (!cancelled) void syncPendingWrites();
+    });
+    const onOnline = () => void syncPendingWrites();
+    window.addEventListener("online", onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("online", onOnline);
+    };
+  }, [user, syncPendingWrites]);
 
   useEffect(() => {
     if (!user) return;
@@ -257,6 +299,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const check = backend.checkTaskReminders;
     if (!check) return;
     const tick = () => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
       const now = Date.now();
       // No máximo uma checagem por minuto.
       if (now - remindersCheckedAtRef.current < 45_000) return;

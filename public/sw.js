@@ -13,7 +13,7 @@
  * Ao mudar as estratégias de cache, aumente a VERSION para limpar o cache
  * antigo de quem já instalou o app.
  */
-const VERSION = "conectatea-v5";
+const VERSION = "conectatea-v6";
 const CACHE_PREFIX = "conectatea-";
 const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
 const PAGES_CACHE = `${CACHE_PREFIX}pages-${VERSION}`;
@@ -34,6 +34,25 @@ const PRECACHE = [
   `${BASE}/icons/apple-touch-icon.png`,
 ];
 
+// Telas do app. Guardar todas na instalação faz o app inteiro abrir offline,
+// mesmo em páginas que a pessoa ainda não visitou. Os arquivos JS/CSS citados
+// em cada HTML também entram no cache.
+const APP_ROUTES = [
+  "/",
+  "/entrar",
+  "/recuperar-senha",
+  "/redefinir-senha",
+  "/dependente",
+  "/dependente/rotina",
+  "/dependente/sons",
+  "/dependente/emocoes",
+  "/responsavel",
+  "/responsavel/rotina",
+  "/responsavel/emocoes",
+  "/responsavel/ajuda",
+  "/responsavel/dependentes",
+];
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
@@ -42,10 +61,75 @@ self.addEventListener("install", (event) => {
       await Promise.allSettled(
         PRECACHE.map((url) => cache.add(new Request(url, { cache: "reload" }))),
       );
+      await precacheAppShell();
       await self.skipWaiting();
     })(),
   );
 });
+
+/**
+ * Baixa o HTML de cada tela e os arquivos /_next/static que ele referencia.
+ * Assim o app abre offline mesmo antes de a pessoa navegar por todas as telas.
+ */
+async function precacheAppShell() {
+  const pages = await caches.open(PAGES_CACHE);
+  const assets = new Set();
+
+  await Promise.allSettled(
+    APP_ROUTES.map(async (route) => {
+      const path = route === "/" ? `${BASE}/` : `${BASE}${route}/`;
+      const plain = path.endsWith("/") ? path.slice(0, -1) : path;
+      try {
+        const response = await fetch(path, { cache: "reload" });
+        if (!response || !response.ok) return;
+        // O app usa /rota/ ou /rota dependendo da hospedagem: guarda as duas.
+        await pages.put(path, response.clone());
+        if (plain && plain !== path) await pages.put(plain, response.clone());
+        const html = await response.text();
+        for (const match of html.matchAll(/(?:src|href)="([^"]*\/_next\/static\/[^"]+)"/g)) {
+          const value = match[1];
+          assets.add(value.startsWith("/") ? value : `/${value}`);
+        }
+
+        // Payloads de navegação (RSC) que o Next busca ao trocar de tela. Sem
+        // eles, trocar de página offline cairia na navegação completa.
+        const flightPaths = [
+          `${path}index.txt`,
+          `${path}__next._full.txt`,
+          `${path}__next._tree.txt`,
+          `${path}__next.__PAGE__.txt`,
+        ];
+        if (plain && plain !== path) flightPaths.push(`${plain}.txt`);
+        await Promise.allSettled(
+          flightPaths.map(async (url) => {
+            try {
+              const flight = await fetch(url, { cache: "reload" });
+              if (flight && flight.ok) await pages.put(url, flight);
+            } catch {
+              // Payload indisponível nesta hospedagem; ignora.
+            }
+          }),
+        );
+      } catch {
+        // Rota indisponível agora; o cache de navegação cobre depois.
+      }
+    }),
+  );
+
+  await Promise.allSettled(
+    [...assets].map(async (asset) => {
+      try {
+        const response = await fetch(asset, { cache: "reload" });
+        if (response && response.ok) {
+          const cache = await caches.open(STATIC_CACHE);
+          await cache.put(asset, response);
+        }
+      } catch {
+        // Será buscado na primeira navegação com internet.
+      }
+    }),
+  );
+}
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
@@ -210,7 +294,7 @@ async function networkFirstPage(request) {
 }
 
 async function cacheFirst(request) {
-  const cached = await caches.match(request);
+  const cached = await caches.match(request, { ignoreSearch: true });
   if (cached) return cached;
 
   try {
@@ -227,7 +311,9 @@ async function cacheFirst(request) {
 
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(STATIC_CACHE);
-  const cached = await cache.match(request);
+  // `ignoreSearch` importa para os payloads .txt de navegação, que chegam com
+  // um parâmetro de cache (_rsc) diferente a cada navegação.
+  const cached = await caches.match(request, { ignoreSearch: true });
 
   const network = fetch(request)
     .then((response) => {
